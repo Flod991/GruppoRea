@@ -24,7 +24,8 @@ const page = [
   `<style>\n${read('css/style.css')}\n</style>`,
   body.trim(),
   script('window.TURNI_EMBED = true;'),
-  script(read('js/config.js')),
+  // La pagina su claude.ai non può collegarsi a Supabase: resta in modalità locale.
+  script('window.TURNI_CONFIG = {};'),
   script(read('js/scheduler.js')),
   script(read('js/storage.js')),
   script(read('js/app.js')),

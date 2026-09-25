@@ -47,20 +47,23 @@ la differenza viene distribuita su tutti e compensata settimana dopo settimana.
 
 ## Database condiviso (Supabase)
 
-Senza database i dati restano nel browser di chi usa l'app: ogni computer ha i suoi.
-Per far lavorare tutte le sedi sugli stessi dati serve un progetto [Supabase](https://supabase.com) (il piano gratuito basta).
+L'app è collegata al progetto Supabase indicato in [`js/config.js`](js/config.js): per entrare servono email e password
+di un utente creato in **Authentication → Users**. Per aggiungere una persona basta creare lì un nuovo utente.
+
+Svuotando i due valori di `js/config.js` l'app torna a salvare i dati solo nel browser.
+Per collegare un nuovo progetto Supabase:
 
 1. Crea un progetto su supabase.com.
 2. Apri **SQL Editor → New query**, incolla il contenuto di [`supabase/schema.sql`](supabase/schema.sql) e premi **Run**.
 3. In **Authentication → Users → Add user** crea un utente (email e password) per ogni persona o sede che deve usare l'app.
    In **Authentication → Sign In / Providers** disattiva *Allow new users to sign up*, così nessun altro può registrarsi.
-4. In **Project Settings → API** copia *Project URL* e la chiave *anon public* e inseriscile in [`js/config.js`](js/config.js).
+4. In **Project Settings → API Keys** copia *Project URL* e la chiave *publishable* (o *anon public*) e inseriscile in [`js/config.js`](js/config.js).
 
 Da quel momento l'app chiede email e password e salva tutto nel database. Ogni punto vendita è salvato separatamente:
 due sedi possono lavorare nello stesso momento e le modifiche compaiono subito anche alle altre.
 Al primo accesso, se nel browser c'erano già dati reali (non di esempio), vengono caricati nel database.
 
-La chiave *anon* può stare nel codice pubblico: senza accesso con un utente registrato i dati non sono leggibili né modificabili.
+La chiave *publishable* può stare nel codice pubblico: senza accesso con un utente registrato i dati non sono leggibili né modificabili.
 
 ## Sviluppo
 
@@ -69,6 +72,7 @@ index.html              pagina dell'app
 js/scheduler.js         motore di generazione dei turni (senza dipendenze, testato in Node)
 js/storage.js           salvataggio nel browser o su Supabase
 js/config.js            configurazione del database
+js/vendor/              libreria Supabase (supabase-js 2.116.0, licenza MIT)
 js/app.js               interfaccia
 css/style.css           stili (tema chiaro/scuro e stampa)
 supabase/schema.sql     tabella e regole di accesso del database

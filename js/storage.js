@@ -10,7 +10,8 @@
 
   const LOCAL_KEY = 'gruppoRea.turni.v1';
   const TABLE = 'turni_dati';
-  const SUPABASE_SRC = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4';
+  // Copia locale della libreria @supabase/supabase-js (licenza MIT), caricata solo se serve.
+  const SUPABASE_SRC = 'js/vendor/supabase-2.116.0.js';
 
   function readLocal() {
     try {

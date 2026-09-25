@@ -13,7 +13,9 @@ if (!out) {
 
 const html = read('index.html');
 const title = html.match(/<title>(.*?)<\/title>/)[1];
-const body = html.slice(html.indexOf('<body>') + 6, html.indexOf('<script src='));
+// Il logo viene incorporato come data URI: la pagina su claude.ai non ha file accanto.
+const logo = `data:image/svg+xml;base64,${Buffer.from(read('img/logo.svg')).toString('base64')}`;
+const body = html.slice(html.indexOf('<body>') + 6, html.indexOf('<script src=')).replace('src="img/logo.svg"', `src="${logo}"`);
 const script = (code) => {
   if (code.includes('</script')) throw new Error('Il codice contiene </script>');
   return `<script>\n${code}\n</script>`;
@@ -23,7 +25,7 @@ const page = [
   `<title>${title}</title>`,
   `<style>\n${read('css/style.css')}\n</style>`,
   body.trim(),
-  script('window.TURNI_EMBED = true;'),
+  script(`window.TURNI_EMBED = true;\nwindow.TURNI_LOGO = '${logo}';`),
   // La pagina su claude.ai non può collegarsi a Supabase: resta in modalità locale.
   script('window.TURNI_CONFIG = {};'),
   script(read('js/scheduler.js')),

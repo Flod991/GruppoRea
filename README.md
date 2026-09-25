@@ -81,6 +81,8 @@ js/scheduler.js         motore di generazione dei turni (senza dipendenze, testa
 js/storage.js           salvataggio nel browser o su Supabase
 js/config.js            configurazione del database
 js/pdf.js               creazione del PDF dei turni
+img/                    logo (vettoriale), icone dell'app e logo per i PDF
+manifest.webmanifest    installazione come app sul telefono
 js/vendor/              librerie esterne con licenza MIT: supabase-js 2.116.0, jsPDF 4.2.1, jsPDF-AutoTable 5.0.8
 js/app.js               interfaccia
 css/style.css           stili (tema chiaro/scuro e stampa)
@@ -88,5 +90,7 @@ supabase/schema.sql     tabella e regole di accesso del database
 tests/                  test del motore
 scripts/build-artifact.js  versione a file unico
 ```
+
+Verifica del sito e del database pubblicati: GitHub → Actions → *Verifica online* → *Run workflow*.
 
 Test: `npm test` (serve Node 18 o superiore). Girano anche automaticamente su GitHub a ogni modifica.

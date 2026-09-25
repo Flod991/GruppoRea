@@ -53,6 +53,8 @@
   const UI_KEY = 'gruppoRea.turni.ui';
   // Nella versione pubblicata su claude.ai stampa e download non sono disponibili.
   const EMBED = !!window.TURNI_EMBED;
+  // Logo (la versione a file unico lo passa già incorporato).
+  const LOGO_SRC = window.TURNI_LOGO || 'img/logo.svg';
 
   const storeName = (id) => (STORES.find((s) => s.id === id) || {}).name || id;
   const deptName = (id) => (DEPTS.find((d) => d.id === id) || {}).name || id;
@@ -385,6 +387,7 @@
   else mobileQuery.addListener(onMobileChange);
 
   function render() {
+    document.body.classList.remove('auth');
     document.getElementById('tabs').hidden = false;
     document.getElementById('pickers').hidden = false;
     document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.tab === ui.tab)));
@@ -1018,14 +1021,17 @@
   function renderLogin(message) {
     document.getElementById('tabs').hidden = true;
     document.getElementById('pickers').hidden = true;
-    view.innerHTML = `<form class="panel form login" id="login-form">
+    document.body.classList.add('auth');
+    view.innerHTML = `<div class="login">
+      <div class="login-hero"><img src="${LOGO_SRC}" alt="Gruppo Rea"><span>Turni del personale</span></div>
+      <form class="panel form" id="login-form">
         <h2>Accedi</h2>
         <p class="hint">Usa l'email e la password che ti ha dato l'amministratore.</p>
         ${message ? `<div class="note bad">${esc(message)}</div>` : ''}
         <label class="field">Email<input id="l-email" type="email" name="email" required autocomplete="username"></label>
         <label class="field">Password<input id="l-pass" type="password" name="password" required autocomplete="current-password"></label>
         <button class="btn primary" type="submit">Accedi</button>
-      </form>`;
+      </form></div>`;
     document.getElementById('l-email').focus();
   }
 
@@ -1421,7 +1427,10 @@
       return render();
     }
 
-    view.innerHTML = '<p class="empty">Connessione al database…</p>';
+    document.body.classList.add('auth');
+    document.getElementById('tabs').hidden = true;
+    document.getElementById('pickers').hidden = true;
+    view.innerHTML = `<div class="login"><div class="login-hero"><img src="${LOGO_SRC}" alt="Gruppo Rea"><span>Connessione in corso…</span></div></div>`;
     let user;
     try {
       user = await storage.init();

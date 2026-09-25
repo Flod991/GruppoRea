@@ -45,10 +45,30 @@
    */
   const MARGIN = 12;
 
+  // Logo per l'intestazione (PNG 468x296 su fondo blu), caricato una volta.
+  let logo = null;
+  async function loadLogo() {
+    if (logo !== null) return logo;
+    try {
+      const src = root.TURNI_LOGO_PNG || 'img/logo-pdf.png';
+      const blob = await (await fetch(src)).blob();
+      logo = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsDataURL(blob);
+      });
+    } catch (e) {
+      logo = ''; // senza logo il PDF si crea comunque
+    }
+    return logo;
+  }
+
   function header(doc, data) {
     const pageW = doc.internal.pageSize.getWidth();
-    doc.setFillColor(200, 16, 46);
+    doc.setFillColor(40, 52, 64);
     doc.rect(0, 0, pageW, 3, 'F');
+    if (logo) doc.addImage(logo, 'PNG', pageW - MARGIN - 27, 6.5, 27, 17.1, 'logo', 'FAST');
     doc.setTextColor(27, 34, 44);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(17);
@@ -83,6 +103,7 @@
 
   async function build(data) {
     await ensure();
+    await loadLogo();
     const { jsPDF } = root.jspdf;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const pageH = doc.internal.pageSize.getHeight();
@@ -136,6 +157,7 @@
    */
   async function buildSummary(data) {
     await ensure();
+    await loadLogo();
     const { jsPDF } = root.jspdf;
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = doc.internal.pageSize.getWidth();

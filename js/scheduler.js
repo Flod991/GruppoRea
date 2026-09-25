@@ -13,7 +13,8 @@
  *   3. evitare, quando possibile, il pomeriggio seguito dal mattino del giorno dopo.
  *
  * Le caselle inserite a mano (opts.fixed) non vengono mai modificate: i turni
- * M/P fissati contano per la copertura, mentre riposo, ferie e assenze rendono
+ * M/P fissati contano per la copertura, la giornata intera 'G' copre sia il
+ * mattino sia il pomeriggio (e vale un giorno di lavoro), mentre riposo, ferie e assenze rendono
  * il dipendente non disponibile quel giorno. Ferie e assenze riducono anche il
  * numero massimo di turni della settimana.
  *
@@ -27,6 +28,8 @@
   'use strict';
 
   const SHIFTS = ['M', 'P'];
+  // Posizioni di una casella: mattino, pomeriggio, giornata intera.
+  const SLOTS = ['M', 'P', 'G'];
 
   // Pesi della funzione obiettivo: il carico equo prevale sul bilanciamento M/P,
   // che a sua volta prevale sulla penalità "pomeriggio → mattino".
@@ -64,11 +67,11 @@
    * @param {Array<{id:string, dept:string, maxShifts?:number, availability?:string[]}>} opts.employees
    * @param {Object<string, Array<{M:number,P:number}>>} opts.requirements  reparto -> giorno -> fabbisogno
    * @param {Object<string, {M:number,P:number}>} [opts.history]  turni già svolti in passato per dipendente
-   * @param {Object<string, Object<number,string>>} [opts.fixed]  dipendente -> giorno -> 'M'|'P'|'R'|'F'|'A' inseriti a mano
+   * @param {Object<string, Object<number,string>>} [opts.fixed]  dipendente -> giorno -> 'M'|'P'|'G'|'R'|'F'|'A' inseriti a mano
    * @param {number} [opts.days=7]
    * @param {number} [opts.defaultMaxShifts=5]
    * @param {number} [opts.seed=1]  cambia il seed per ottenere soluzioni alternative equivalenti
-   * @returns {{schedule: Array<Object<string,{M:string[],P:string[]}>>, shortages: Array<{day:number,dept:string,shift:string,missing:number}>}}
+   * @returns {{schedule: Array<Object<string,{M:string[],P:string[],G:string[]}>>, shortages: Array<{day:number,dept:string,shift:string,missing:number}>}}
    */
   function generate(opts) {
     const {
@@ -115,25 +118,30 @@
     // work[i][d] = null | 'M' | 'P'
     const work = emps.map((_, i) => {
       const row = new Array(days).fill(null);
-      for (let d = 0; d < days; d++) if (fix[i][d] === 'M' || fix[i][d] === 'P') row[d] = fix[i][d];
+      for (let d = 0; d < days; d++) if (fix[i][d] === 'M' || fix[i][d] === 'P' || fix[i][d] === 'G') row[d] = fix[i][d];
       return row;
     });
     const shortages = [];
 
+    // m, p: mattine e pomeriggi (per il bilanciamento); g: giornate intere; n: giorni lavorati.
     const count = (i) => {
-      let m = 0, p = 0;
+      let m = 0, p = 0, g = 0;
       for (const s of work[i]) {
         if (s === 'M') m++;
         else if (s === 'P') p++;
+        else if (s === 'G') g++;
       }
-      return { m, p };
+      return { m, p, g, n: m + p + g };
     };
 
     // ---- 1. Costruzione greedy, giorno per giorno ----
     for (let d = 0; d < days; d++) {
       const need = { M: need0(req, d, 'M'), P: need0(req, d, 'P') };
       // I turni fissati a mano coprono già parte del fabbisogno.
-      for (let i = 0; i < n; i++) if (locked(i, d) && work[i][d]) need[work[i][d]] = Math.max(0, need[work[i][d]] - 1);
+      for (let i = 0; i < n; i++) {
+        if (!locked(i, d) || !work[i][d]) continue;
+        for (const s of work[i][d] === 'G' ? SHIFTS : [work[i][d]]) need[s] = Math.max(0, need[s] - 1);
+      }
       // Si riempie prima il turno con meno candidati per posto richiesto.
       const order = SHIFTS.slice().sort((a, b) => ratio(a) - ratio(b));
       function ratio(s) {
@@ -147,11 +155,11 @@
           let best = -1, bestScore = Infinity;
           for (let i = 0; i < n; i++) {
             if (work[i][d] || !ok(i, d, s)) continue;
-            const { m, p } = count(i);
-            if (m + p >= max[i]) continue;
+            const { m, p, n: worked } = count(i);
+            if (worked >= max[i]) continue;
             const diff = histDiff[i] + m - p; // >0: più mattine che pomeriggi
             const directional = s === 'M' ? diff : -diff;
-            let score = ((m + p) / max[i]) * 10 + directional;
+            let score = (worked / max[i]) * 10 + directional;
             if (s === 'M' && d > 0 && work[i][d - 1] === 'P') score += W_TURNAROUND;
             // Chi oggi può fare solo questo turno va preferito: non servirebbe altrove.
             const other = s === 'M' ? 'P' : 'M';
@@ -173,10 +181,10 @@
     const objective = () => {
       let total = 0;
       for (let i = 0; i < n; i++) {
-        const { m, p } = count(i);
+        const { m, p, n: worked } = count(i);
         const diff = histDiff[i] + m - p;
         total += W_BALANCE * diff * diff;
-        total += (W_LOAD * (m + p) * (m + p)) / max[i];
+        total += (W_LOAD * worked * worked) / Math.max(1, max[i]);
         for (let d = 1; d < days; d++) {
           if (work[i][d - 1] === 'P' && work[i][d] === 'M') total += W_TURNAROUND;
         }
@@ -205,8 +213,7 @@
           if (!s || locked(a, d)) continue;
           for (let b = 0; b < n; b++) {
             if (b === a || work[b][d] || !ok(b, d, s)) continue;
-            const { m, p } = count(b);
-            if (m + p >= max[b]) continue;
+            if (count(b).n >= max[b]) continue;
             work[a][d] = null; work[b][d] = s;
             const v = objective();
             if (v < current - 1e-9) { current = v; improved = true; break; }
@@ -218,7 +225,8 @@
         for (let a = 0; a < n; a++) {
           const s = work[a][d];
           if (!s) continue;
-          for (let e = 0; e < days; e++) {
+          // Dopo uno scambio riuscito il turno di a nel giorno d cambia: si passa al dipendente successivo.
+          swaps: for (let e = 0; e < days; e++) {
             if (e === d) continue;
             const t = work[a][e];
             if (!t || t === s) continue;
@@ -228,7 +236,7 @@
               if (!ok(a, d, t) || !ok(b, d, s) || !ok(a, e, s) || !ok(b, e, t)) continue;
               work[a][d] = t; work[b][d] = s; work[a][e] = s; work[b][e] = t;
               const v = objective();
-              if (v < current - 1e-9) { current = v; improved = true; break; }
+              if (v < current - 1e-9) { current = v; improved = true; break swaps; }
               work[a][d] = s; work[b][d] = t; work[a][e] = t; work[b][e] = s;
             }
           }
@@ -239,7 +247,7 @@
 
     const out = [];
     for (let d = 0; d < days; d++) {
-      const cell = { M: [], P: [] };
+      const cell = { M: [], P: [], G: [] };
       for (let i = 0; i < n; i++) if (work[i][d]) cell[work[i][d]].push(emps[i].id);
       out.push(cell);
     }
@@ -251,15 +259,15 @@
     return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
   }
 
-  /** Conta mattine/pomeriggi per dipendente in una pianificazione. */
+  /** Conta mattine, pomeriggi e giornate intere per dipendente in una pianificazione. */
   function countShifts(schedule, into) {
     const acc = into || {};
     for (const day of schedule || []) {
       for (const dept of Object.keys(day || {})) {
-        for (const s of SHIFTS) {
+        for (const s of SLOTS) {
           for (const id of day[dept][s] || []) {
-            const c = (acc[id] = acc[id] || { M: 0, P: 0 });
-            c[s]++;
+            const c = (acc[id] = acc[id] || { M: 0, P: 0, G: 0 });
+            c[s] = (c[s] || 0) + 1;
           }
         }
       }
@@ -267,5 +275,5 @@
     return acc;
   }
 
-  return { generate, countShifts, canWork, SHIFTS };
+  return { generate, countShifts, canWork, SHIFTS, SLOTS };
 });

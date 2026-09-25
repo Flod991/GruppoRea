@@ -23,7 +23,9 @@
   ];
   const DAY_NAMES = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
   const DAY_SHORT = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
-  const SHIFT_NAMES = { M: 'Mattino', P: 'Pomeriggio' };
+  const SHIFT_NAMES = { M: 'Mattino', P: 'Pomeriggio', G: 'Giornata intera' };
+  // Posizioni di una casella: mattino, pomeriggio e giornata intera (copre entrambi).
+  const SLOTS = ['M', 'P', 'G'];
   const AVAIL_OPTIONS = [
     { v: '', short: 'Sì' },
     { v: 'M', short: 'Solo M' },
@@ -34,6 +36,7 @@
   const CELL_OPTIONS = [
     { v: 'M', label: 'Mattino' },
     { v: 'P', label: 'Pomeriggio' },
+    { v: 'G', label: 'Giornata intera' },
     { v: 'R', label: 'Riposo' },
     { v: 'F', label: 'Ferie' },
     { v: 'A', label: 'Assente' },
@@ -221,13 +224,17 @@
   }
 
   function loadUI() {
-    const def = { tab: 'plan', store: STORES[0].id, dept: DEPTS[0].id, week: toISO(mondayOf(new Date())), period: 'week' };
+    const now = new Date();
+    const def = { tab: 'plan', store: STORES[0].id, dept: DEPTS[0].id, week: toISO(mondayOf(now)), period: 'month',
+      sumMonth: now.getMonth(), sumYear: now.getFullYear() };
     try {
       const ui = Object.assign(def, JSON.parse(localStorage.getItem(UI_KEY) || '{}'));
       if (!STORES.some((x) => x.id === ui.store)) ui.store = def.store;
       if (ui.dept && !DEPTS.some((x) => x.id === ui.dept)) ui.dept = DEPTS[0].id;
       if (!['plan', 'summary', 'staff', 'settings'].includes(ui.tab)) ui.tab = 'plan';
-      if (!PERIODS.some((x) => x.v === ui.period)) ui.period = 'week';
+      if (!PERIODS.some((x) => x.v === ui.period)) ui.period = 'month';
+      if (!(ui.sumMonth >= 0 && ui.sumMonth <= 11)) ui.sumMonth = def.sumMonth;
+      if (!Number.isInteger(ui.sumYear)) ui.sumYear = def.sumYear;
       return ui;
     } catch (e) {
       return def;
@@ -259,7 +266,9 @@
   const empById = (id) => state.employees.find((e) => e.id === id);
   const getSchedule = (store, week) => (state.schedules[store] || {})[week];
   const weekDates = (week) => DAY_NAMES.map((_, i) => addDays(fromISO(week), i));
-  const timeRange = (s) => `${state.settings.times[s].start}–${state.settings.times[s].end}`;
+  const timeRange = (s) => (s === 'G'
+    ? `${state.settings.times.M.start}–${state.settings.times.P.end}`
+    : `${state.settings.times[s].start}–${state.settings.times[s].end}`);
   const need = (store, dept, d, s) => Number(((state.requirements[store][dept] || [])[d] || {})[s]) || 0;
 
   function ensureSchedule(store, week) {
@@ -272,7 +281,7 @@
 
   function cellOf(sched, d, dept) {
     const day = sched.days[d];
-    day[dept] = day[dept] || { M: [], P: [] };
+    day[dept] = day[dept] || { M: [], P: [], G: [] };
     return day[dept];
   }
 
@@ -283,9 +292,12 @@
   function setCell(emp, d, value) {
     const sched = ensureSchedule(ui.store, ui.week);
     for (const dept of Object.keys(sched.days[d])) {
-      for (const s of ['M', 'P']) sched.days[d][dept][s] = sched.days[d][dept][s].filter((id) => id !== emp.id);
+      for (const s of SLOTS) sched.days[d][dept][s] = (sched.days[d][dept][s] || []).filter((id) => id !== emp.id);
     }
-    if (value === 'M' || value === 'P') cellOf(sched, d, emp.dept)[value].push(emp.id);
+    if (SLOTS.includes(value)) {
+      const c = cellOf(sched, d, emp.dept);
+      (c[value] = c[value] || []).push(emp.id);
+    }
     sched.manual = sched.manual || {};
     const m = (sched.manual[emp.id] = sched.manual[emp.id] || {});
     if (value) m[d] = value;
@@ -294,6 +306,8 @@
   }
 
   const assigned = (sched, d, dept, s) => (sched && sched.days[d] && sched.days[d][dept] ? sched.days[d][dept][s] || [] : []);
+  /** Chi copre il turno s (M o P): chi fa quel turno più chi fa la giornata intera. */
+  const coverIds = (sched, d, dept, s) => assigned(sched, d, dept, s).concat(assigned(sched, d, dept, 'G'));
 
   /** Mappa id dipendente -> { dept, shift } per un giorno. */
   function workingOn(sched, d) {
@@ -301,7 +315,7 @@
     if (!sched) return map;
     const day = sched.days[d] || {};
     for (const dept of Object.keys(day)) {
-      for (const s of ['M', 'P']) for (const id of day[dept][s] || []) map[id] = { dept, shift: s };
+      for (const s of SLOTS) for (const id of day[dept][s] || []) map[id] = { dept, shift: s };
     }
     return map;
   }
@@ -320,7 +334,7 @@
     let missing = 0;
     for (const dept of depts) {
       for (let d = 0; d < 7; d++) {
-        for (const s of ['M', 'P']) missing += Math.max(0, need(store, dept, d, s) - assigned(sched, d, dept, s).length);
+        for (const s of ['M', 'P']) missing += Math.max(0, need(store, dept, d, s) - coverIds(sched, d, dept, s).length);
       }
     }
     return missing;
@@ -351,7 +365,7 @@
       // Toglie i dipendenti rigenerati da altri reparti (dati di versioni precedenti), salvo scelte manuali.
       for (const other of Object.keys(sched.days[d])) {
         if (depts.includes(other)) continue;
-        for (const s of ['M', 'P']) sched.days[d][other][s] = sched.days[d][other][s].filter((id) => !ids.has(id) || manualOf(sched, id, d));
+        for (const s of SLOTS) sched.days[d][other][s] = (sched.days[d][other][s] || []).filter((id) => !ids.has(id) || manualOf(sched, id, d));
       }
       for (const dept of depts) sched.days[d][dept] = day[dept];
     });
@@ -383,7 +397,7 @@
     const renderers = { plan: renderPlan, summary: renderSummary, staff: renderStaff, settings: renderSettings };
     view.innerHTML = renderers[ui.tab]();
     // Carica in anticipo le librerie del PDF, così la condivisione parte subito dopo il tocco.
-    if (ui.tab === 'plan' && !EMBED && getSchedule(ui.store, ui.week) && window.TurniPDF) {
+    if ((ui.tab === 'plan' || ui.tab === 'summary') && !EMBED && window.TurniPDF) {
       setTimeout(() => TurniPDF.ensure().catch(() => {}), 800);
     }
   }
@@ -454,24 +468,24 @@
 
     const head = `<tr><th class="sticky">Dipendente</th>
       ${dates.map((dt, i) => `<th class="day">${DAY_SHORT[i]} <span class="date">${fmtShort(dt)}</span></th>`).join('')}
-      <th class="num">Mat.</th><th class="num">Pom.</th></tr>`;
+      <th class="num" title="Mattine">Mat.</th><th class="num" title="Pomeriggi">Pom.</th><th class="num" title="Giornate intere">Int.</th></tr>`;
 
     const needRow = `<tr class="need-row no-print"><th class="sticky">Persone richieste</th>
       ${dates.map((_, d) => `<td><div class="need-pair">${['M', 'P'].map((s) => `
         <label class="need ${s}"><span>${s}</span><input type="number" inputmode="numeric" min="0" max="50"
           value="${need(store, dept, d, s)}" data-action="need" data-day="${d}" data-shift="${s}"
           aria-label="${SHIFT_NAMES[s]} di ${DAY_NAMES[d]}: persone richieste"></label>`).join('')}</div></td>`).join('')}
-      <td colspan="2"></td></tr>`;
+      <td colspan="3"></td></tr>`;
 
     const rows = emps.map((e) => {
-      let m = 0, p = 0;
+      let m = 0, p = 0, g = 0;
       const cells = dates.map((_, d) => {
         const w = working[d][e.id];
         const man = manualOf(sched, e.id, d);
         let cls = 'off';
         let label = (e.availability || [])[d] === 'X' ? 'Riposo' : '—';
         if (w) {
-          if (w.shift === 'M') m++; else p++;
+          if (w.shift === 'M') m++; else if (w.shift === 'P') p++; else g++;
           cls = w.shift;
           label = w.dept === dept ? SHIFT_NAMES[w.shift] : `${w.shift} · ${deptName(w.dept)}`;
           if (w.dept !== dept) cls += ' elsewhere';
@@ -485,23 +499,24 @@
           aria-label="${esc(e.name)}, ${DAY_NAMES[d]}: ${esc(label)}${man ? ', inserito a mano' : ''}. Premi per cambiare">${esc(label)}</button></td>`;
       }).join('');
       return `<tr><th class="sticky name">${esc(e.name)}</th>${cells}
-        <td class="num">${m}</td><td class="num">${p}</td></tr>`;
+        <td class="num">${m}</td><td class="num">${p}</td><td class="num">${g}</td></tr>`;
     }).join('');
 
     const cover = `<tr class="cover-row"><th class="sticky">Copertura</th>
       ${dates.map((_, d) => `<td>${['M', 'P'].map((s) => {
         const n = need(store, dept, d, s);
         if (!n) return '';
-        const have = assigned(sched, d, dept, s).length;
+        const have = coverIds(sched, d, dept, s).length;
         return `<span class="cov ${have >= n ? 'ok' : 'bad'}">${s} ${have}/${n}</span>`;
       }).join(' ') || '<span class="muted small">Chiuso</span>'}</td>`).join('')}
-      <td colspan="2"></td></tr>`;
+      <td colspan="3"></td></tr>`;
 
     return `<div class="table-wrap"><table class="week dept-week">
         <thead>${head}</thead><tbody>${needRow}${rows}${cover}</tbody></table></div>
       <div class="legend no-print">
         <span><i class="sw M"></i>Mattino ${esc(timeRange('M'))}</span>
         <span><i class="sw P"></i>Pomeriggio ${esc(timeRange('P'))}</span>
+        <span><i class="sw G"></i>Giornata intera ${esc(timeRange('G'))}</span>
         <span><i class="sw F"></i>Ferie</span>
         <span><i class="sw A"></i>Assente</span>
         <span><i class="sw manual"></i>Inserito a mano: la generazione non lo cambia</span>
@@ -542,16 +557,17 @@
           aria-label="${SHIFT_NAMES[s]} di ${DAY_NAMES[d]}: persone richieste"></label>`).join('')}</div>`).join('')}</div></div>`;
 
     const cards = emps.map((e) => {
-      let m = 0, p = 0;
+      let m = 0, p = 0, g = 0;
       const cells = dates.map((_, d) => {
         const c = cellState(e, d, sched, working, dept);
         if (c.kind === 'M') m++;
         if (c.kind === 'P') p++;
+        if (c.kind === 'G') g++;
         const cls = ['cell', 'mini', c.kind || 'off', c.kind === 'R' ? 'rest' : '', c.man ? 'manual' : '', c.other ? 'elsewhere' : '', c.conflict ? 'conflict' : ''].join(' ');
         return `<button class="${cls}" data-action="pick" data-id="${e.id}" data-day="${d}" aria-haspopup="menu"
           aria-label="${esc(e.name)}, ${DAY_NAMES[d]}: ${esc(c.long)}${c.man ? ', inserito a mano' : ''}. Premi per cambiare">${c.short}</button>`;
       }).join('');
-      return `<div class="wk-card"><div class="wk-name">${esc(e.name)}<span class="muted small">${m} M · ${p} P</span></div>
+      return `<div class="wk-card"><div class="wk-name">${esc(e.name)}<span class="muted small">${m} M · ${p} P${g ? ` · ${g} G` : ''}</span></div>
         <div class="wk-grid">${cells}</div></div>`;
     }).join('');
 
@@ -559,7 +575,7 @@
       <div class="wk-grid">${dates.map((_, d) => `<div>${['M', 'P'].map((s) => {
         const n = need(store, dept, d, s);
         if (!n) return '';
-        const have = assigned(sched, d, dept, s).length;
+        const have = coverIds(sched, d, dept, s).length;
         return `<span class="cov ${have >= n ? 'ok' : 'bad'}">${s} ${have}/${n}</span>`;
       }).join('') || '<span class="muted small">—</span>'}</div>`).join('')}</div></div>`;
 
@@ -567,6 +583,7 @@
       <div class="legend">
         <span><i class="sw M"></i>M Mattino ${esc(timeRange('M'))}</span>
         <span><i class="sw P"></i>P Pomeriggio ${esc(timeRange('P'))}</span>
+        <span><i class="sw G"></i>G Giornata intera</span>
         <span><i class="sw R"></i>R Riposo</span>
         <span><i class="sw F"></i>F Ferie</span>
         <span><i class="sw A"></i>A Assente</span>
@@ -579,16 +596,16 @@
     const todayIdx = dates.findIndex((dt) => toISO(dt) === toISO(new Date()));
     const day = Number.isInteger(ui.day) && ui.day >= 0 && ui.day < 7 ? ui.day : Math.max(0, todayIdx);
     const chips = `<div class="day-chips" role="group" aria-label="Giorno">${dates.map((dt, i) => {
-      const miss = DEPTS.reduce((a, dp) => a + ['M', 'P'].reduce((b, s) => b + Math.max(0, need(store, dp.id, i, s) - assigned(sched, i, dp.id, s).length), 0), 0);
+      const miss = DEPTS.reduce((a, dp) => a + ['M', 'P'].reduce((b, s) => b + Math.max(0, need(store, dp.id, i, s) - coverIds(sched, i, dp.id, s).length), 0), 0);
       return `<button class="${i === day ? 'on' : ''}" aria-pressed="${i === day}" data-action="day" data-day="${i}">
         <b>${DAY_SHORT[i]}</b>${dt.getDate()}${sched && miss ? '<i class="dot" aria-label="posti scoperti"></i>' : ''}</button>`;
     }).join('')}</div>`;
     const cards = DEPTS.map((dept) => {
       const parts = ['M', 'P'].map((s) => {
         const n = need(store, dept.id, day, s);
-        const ids = assigned(sched, day, dept.id, s);
+        const ids = coverIds(sched, day, dept.id, s);
         if (!n && !ids.length) return '';
-        const names = ids.map((id) => (empById(id) || {}).name).filter(Boolean).map(esc).join(', ');
+        const names = ids.map((id) => empLabel(sched, day, dept.id, id)).filter(Boolean).join(', ');
         return `<div class="ov ${s} ${ids.length < n ? 'bad' : ''}"><b>${SHIFT_NAMES[s]} ${ids.length}/${n}</b><span>${names || '—'}</span></div>`;
       }).join('');
       const away = deptEmployees(store, dept.id).filter((e) => ['F', 'A'].includes(manualOf(sched, e.id, day)))
@@ -666,6 +683,13 @@
       <span class="delta ${tot ? cls : ''}">${text}</span></div>`;
   }
 
+  /** Nome per la panoramica, con l'indicazione della giornata intera. */
+  function empLabel(sched, d, dept, id) {
+    const e = empById(id);
+    if (!e) return '';
+    return esc(e.name) + (assigned(sched, d, dept, 'G').includes(id) ? ' <small>(intera)</small>' : '');
+  }
+
   function renderOverview(sched, dates) {
     const store = ui.store;
     const head = `<tr><th class="sticky">Reparto</th>${dates.map((dt, i) => `<th class="day">${DAY_SHORT[i]} <span class="date">${fmtShort(dt)}</span></th>`).join('')}</tr>`;
@@ -673,9 +697,9 @@
       const cells = dates.map((_, d) => {
         const parts = ['M', 'P'].map((s) => {
           const n = need(store, dept.id, d, s);
-          const ids = assigned(sched, d, dept.id, s);
+          const ids = coverIds(sched, d, dept.id, s);
           if (!n && !ids.length) return '';
-          const names = ids.map((id) => (empById(id) || {}).name).filter(Boolean).map(esc).join('<br>');
+          const names = ids.map((id) => empLabel(sched, d, dept.id, id)).filter(Boolean).join('<br>');
           const cls = ids.length < n ? 'bad' : '';
           return `<div class="ov ${s} ${cls}"><b>${s} ${ids.length}/${n}</b>${names ? `<span>${names}</span>` : ''}</div>`;
         }).join('');
@@ -692,27 +716,42 @@
   }
 
   // ---------------------------- Riepilogo ----------------------------
-  /** Intervallo di date del periodo scelto, ancorato alla settimana selezionata. */
+  /** Intervallo di date del periodo scelto nel riepilogo. */
   function periodRange() {
-    const monday = fromISO(ui.week);
-    const thursday = addDays(monday, 3); // la settimana appartiene al mese del suo giovedì
-    const y = thursday.getFullYear();
-    const m = thursday.getMonth();
+    const y = ui.sumYear;
+    const m = ui.sumMonth;
     switch (ui.period) {
-      case 'week': return { from: monday, to: addDays(monday, 6), label: `${fmtShort(monday)} – ${fmtLong(addDays(monday, 6))}` };
+      case 'week': {
+        const monday = fromISO(ui.week);
+        return { from: monday, to: addDays(monday, 6), label: `Settimana ${fmtShort(monday)} – ${fmtLong(addDays(monday, 6))}` };
+      }
       case 'month': return { from: new Date(y, m, 1), to: new Date(y, m + 1, 0), label: `${MONTHS[m]} ${y}` };
-      case 'year': return { from: new Date(y, 0, 1), to: new Date(y, 11, 31), label: String(y) };
+      case 'year': return { from: new Date(y, 0, 1), to: new Date(y, 11, 31), label: `Anno ${y}` };
       default: return { from: null, to: null, label: 'Tutte le settimane salvate' };
     }
   }
 
   function shiftPeriod(dir) {
-    const thursday = addDays(fromISO(ui.week), 3);
-    let target;
-    if (ui.period === 'month') target = new Date(thursday.getFullYear(), thursday.getMonth() + dir, 15);
-    else if (ui.period === 'year') target = new Date(thursday.getFullYear() + dir, 6, 1);
-    else target = addDays(fromISO(ui.week), 7 * dir);
-    setWeek(target);
+    if (ui.period === 'week') return setWeek(addDays(fromISO(ui.week), 7 * dir));
+    if (ui.period === 'month') {
+      const d = new Date(ui.sumYear, ui.sumMonth + dir, 1);
+      ui.sumYear = d.getFullYear();
+      ui.sumMonth = d.getMonth();
+    } else if (ui.period === 'year') {
+      ui.sumYear += dir;
+    }
+    saveUI();
+    render();
+  }
+
+  /** Anni proponibili nel riepilogo: quelli con turni salvati più l'anno in corso. */
+  function summaryYears(store) {
+    const years = new Set([new Date().getFullYear(), ui.sumYear]);
+    for (const w of Object.keys(state.schedules[store] || {})) {
+      years.add(fromISO(w).getFullYear());
+      years.add(addDays(fromISO(w), 6).getFullYear());
+    }
+    return [...years].sort();
   }
 
   /** Conteggi per dipendente e copertura per reparto nel periodo. */
@@ -721,6 +760,7 @@
     const cover = {};
     let days = 0;
     const weeks = state.schedules[store] || {};
+    const rec = (id) => (emp[id] = emp[id] || { M: 0, P: 0, G: 0, F: 0, A: 0 });
     for (const w of Object.keys(weeks)) {
       const sched = weeks[w];
       for (let d = 0; d < 7; d++) {
@@ -731,60 +771,74 @@
           const c = (cover[dept.id] = cover[dept.id] || { need: 0, have: 0 });
           for (const s of ['M', 'P']) {
             const n = need(store, dept.id, d, s);
-            const ids = assigned(sched, d, dept.id, s);
             c.need += n;
-            c.have += Math.min(n, ids.length);
-            for (const id of ids) {
-              const x = (emp[id] = emp[id] || { M: 0, P: 0, F: 0, A: 0 });
-              x[s]++;
-            }
+            c.have += Math.min(n, coverIds(sched, d, dept.id, s).length);
           }
+          for (const s of SLOTS) for (const id of assigned(sched, d, dept.id, s)) rec(id)[s]++;
         }
         for (const id of Object.keys(sched.manual || {})) {
           const v = sched.manual[id][d];
-          if (v === 'F' || v === 'A') {
-            const x = (emp[id] = emp[id] || { M: 0, P: 0, F: 0, A: 0 });
-            x[v]++;
-          }
+          if (v === 'F' || v === 'A') rec(id)[v]++;
         }
       }
     }
     return { emp, cover, days };
   }
 
-  function renderSummary() {
+  const ZERO = { M: 0, P: 0, G: 0, F: 0, A: 0 };
+  const balanceText = (m, p) => (!(m + p) ? '—' : m === p ? 'pari' : m > p ? `+${m - p} mattine` : `+${p - m} pomeriggi`);
+
+  /** Tutti i dati del riepilogo, usati dalla schermata e dal PDF. */
+  function summaryData() {
     const store = ui.store;
     const dept = ui.dept;
     const range = periodRange();
     const { emp, cover, days } = periodStats(store, range);
     const depts = DEPTS.filter((d) => !dept || d.id === dept);
-    const zero = { M: 0, P: 0, F: 0, A: 0 };
+    let need = 0, have = 0;
+    for (const d of depts) { need += (cover[d.id] || {}).need || 0; have += (cover[d.id] || {}).have || 0; }
+    const staff = storeEmployees(store).filter((e) => depts.some((d) => d.id === e.dept));
+    const sum = (k) => staff.reduce((a, e) => a + (emp[e.id] || ZERO)[k], 0);
+    return {
+      store, dept, range, emp, cover, days, depts,
+      totals: { need, have, pct: need ? Math.round((have / need) * 100) : 0, M: sum('M'), P: sum('P'), G: sum('G'), F: sum('F'), A: sum('A') },
+    };
+  }
+
+  function renderSummary() {
+    const data = summaryData();
+    const { store, dept, range, emp, cover, days, depts, totals } = data;
+    const mobile = isMobile();
 
     const tabs = `<div class="segmented no-print" role="group" aria-label="Periodo">
       ${PERIODS.map((x) => `<button class="${x.v === ui.period ? 'on' : ''}" aria-pressed="${x.v === ui.period}" data-action="period" data-period="${x.v}">${x.label}</button>`).join('')}
     </div>`;
-    const nav = ui.period === 'all' ? '' : `<div class="week-nav no-print">
+    const years = summaryYears(store);
+    const monthSel = ui.period === 'month' ? `<select id="sum-month" data-action="sum-month" aria-label="Mese">
+        ${MONTHS.map((m, i) => `<option value="${i}"${i === ui.sumMonth ? ' selected' : ''}>${m}</option>`).join('')}</select>` : '';
+    const yearSel = ui.period === 'month' || ui.period === 'year' ? `<select id="sum-year" data-action="sum-year" aria-label="Anno">
+        ${years.map((y) => `<option value="${y}"${y === ui.sumYear ? ' selected' : ''}>${y}</option>`).join('')}</select>` : '';
+    const nav = ui.period === 'all' ? '' : `<div class="period-nav no-print">
       <button class="btn icon" data-action="period-prev" aria-label="Periodo precedente">‹</button>
+      ${monthSel}${yearSel}${ui.period === 'week' ? `<span class="week-label btn">${fmtShort(range.from)} – ${fmtLong(range.to)}</span>` : ''}
       <button class="btn icon" data-action="period-next" aria-label="Periodo successivo">›</button></div>`;
-
-    let totNeed = 0, totHave = 0;
-    for (const d of depts) { totNeed += (cover[d.id] || {}).need || 0; totHave += (cover[d.id] || {}).have || 0; }
-    const staffAll = storeEmployees(store).filter((e) => depts.some((d) => d.id === e.dept));
-    const sum = (k) => staffAll.reduce((a, e) => a + (emp[e.id] || zero)[k], 0);
+    const pdfBtn = !EMBED && days ? `<button class="btn primary no-print" data-action="summary-pdf">${canSharePdf() ? 'Invia PDF riepilogo' : 'Scarica PDF riepilogo'}</button>` : '';
 
     const kpis = `<div class="kpis">
-      <div class="kpi"><span>Copertura</span><strong>${totNeed ? Math.round((totHave / totNeed) * 100) : 0}%</strong><small>${totHave} di ${totNeed} posti</small></div>
-      <div class="kpi"><span>Posti scoperti</span><strong class="${totNeed - totHave ? 'bad' : ''}">${totNeed - totHave}</strong><small>&nbsp;</small></div>
-      <div class="kpi"><span>Mattine / pomeriggi</span><strong>${sum('M')} / ${sum('P')}</strong><small>turni assegnati</small></div>
-      <div class="kpi"><span>Ferie · Assenze</span><strong>${sum('F')} · ${sum('A')}</strong><small>giorni</small></div>
+      <div class="kpi"><span>Copertura</span><strong>${totals.pct}%</strong><small>${totals.have} di ${totals.need} posti</small></div>
+      <div class="kpi"><span>Posti scoperti</span><strong class="${totals.need - totals.have ? 'bad' : ''}">${totals.need - totals.have}</strong><small>&nbsp;</small></div>
+      <div class="kpi"><span>Mattine · pomeriggi · intere</span><strong>${totals.M} · ${totals.P} · ${totals.G}</strong><small>turni assegnati</small></div>
+      <div class="kpi"><span>Ferie · Assenze</span><strong>${totals.F} · ${totals.A}</strong><small>giorni</small></div>
     </div>`;
 
-    const mobile = isMobile();
+    const coverRow = (d) => {
+      const c = cover[d.id] || { need: 0, have: 0 };
+      return { c, pct: c.need ? Math.round((c.have / c.need) * 100) : 0 };
+    };
     const coverTable = dept ? '' : mobile ? `<section class="panel">
       <h2>Copertura per reparto</h2>
       <ul class="plain-list">${depts.map((d) => {
-        const c = cover[d.id] || { need: 0, have: 0 };
-        const pct = c.need ? Math.round((c.have / c.need) * 100) : 0;
+        const { c, pct } = coverRow(d);
         return `<li><button class="link strong" data-action="summary-dept" data-dept="${d.id}">${esc(d.name)}</button>
           <span class="row"><span class="meter"><span style="width:${pct}%"></span></span><span class="small">${pct}%</span>
           ${c.need - c.have ? `<span class="bad-text small">${c.need - c.have} scoperti</span>` : ''}</span></li>`;
@@ -792,8 +846,7 @@
       <h2>Copertura per reparto</h2>
       <div class="table-wrap flat"><table><thead><tr><th>Reparto</th><th class="num">Posti richiesti</th><th class="num">Coperti</th><th class="num">Scoperti</th><th>Copertura</th></tr></thead>
       <tbody>${depts.map((d) => {
-        const c = cover[d.id] || { need: 0, have: 0 };
-        const pct = c.need ? Math.round((c.have / c.need) * 100) : 0;
+        const { c, pct } = coverRow(d);
         return `<tr><td><button class="link strong" data-action="summary-dept" data-dept="${d.id}">${esc(d.name)}</button></td>
           <td class="num">${c.need}</td><td class="num">${c.have}</td><td class="num ${c.need - c.have ? 'bad-text' : ''}">${c.need - c.have}</td>
           <td><div class="meter"><span style="width:${pct}%"></span></div> <span class="small">${pct}%</span></td></tr>`;
@@ -803,10 +856,11 @@
       const list = deptEmployees(store, d.id);
       if (!list.length) return '';
       return (dept ? '' : `<li class="group">${esc(d.name)}</li>`) + list.map((e) => {
-        const x = emp[e.id] || zero;
-        const extra = [x.F ? `${x.F} ferie` : '', x.A ? `${x.A} ${x.A === 1 ? 'assenza' : 'assenze'}` : ''].filter(Boolean).join(' · ');
+        const x = emp[e.id] || ZERO;
+        const extra = [x.G ? `${x.G} ${x.G === 1 ? 'giornata intera' : 'giornate intere'}` : '', x.F ? `${x.F} ferie` : '',
+          x.A ? `${x.A} ${x.A === 1 ? 'assenza' : 'assenze'}` : ''].filter(Boolean).join(' · ');
         return `<li><div><strong>${esc(e.name)}</strong>
-          <div class="muted small">${x.M} mattine · ${x.P} pomeriggi · ${x.M + x.P} turni${extra ? ` · ${extra}` : ''}</div></div>
+          <div class="muted small">${x.M} mattine · ${x.P} pomeriggi · ${x.M + x.P + x.G} giorni${extra ? ` · ${extra}` : ''}</div></div>
           ${balanceCell(x.M, x.P)}</li>`;
       }).join('');
     }).join('');
@@ -814,16 +868,17 @@
     const empRows = depts.map((d) => {
       const list = deptEmployees(store, d.id);
       if (!list.length) return '';
-      return (dept ? '' : `<tr class="group-row"><th colspan="7">${esc(d.name)}</th></tr>`) + list.map((e) => {
-        const x = emp[e.id] || zero;
-        return `<tr><td>${esc(e.name)}</td><td class="num">${x.M}</td><td class="num">${x.P}</td><td class="num"><strong>${x.M + x.P}</strong></td>
-          <td class="num">${x.F || ''}</td><td class="num">${x.A || ''}</td><td>${balanceCell(x.M, x.P)}</td></tr>`;
+      return (dept ? '' : `<tr class="group-row"><th colspan="8">${esc(d.name)}</th></tr>`) + list.map((e) => {
+        const x = emp[e.id] || ZERO;
+        return `<tr><td>${esc(e.name)}</td><td class="num">${x.M}</td><td class="num">${x.P}</td><td class="num">${x.G || ''}</td>
+          <td class="num"><strong>${x.M + x.P + x.G}</strong></td><td class="num">${x.F || ''}</td><td class="num">${x.A || ''}</td>
+          <td>${balanceCell(x.M, x.P)}</td></tr>`;
       }).join('');
     }).join('');
 
     return `${sampleBanner()}
       <section class="plan-head">
-        <div class="row">${tabs}${nav}</div>
+        <div class="row">${tabs}${nav}<span class="grow"></span>${pdfBtn}</div>
         <h1>Riepilogo ${esc(dept ? deptName(dept) : 'di tutti i reparti')} <span class="sub">· ${esc(storeName(store))} · ${esc(range.label)}</span></h1>
       </section>
       ${days ? `${kpis}
@@ -832,12 +887,42 @@
         <section class="panel">
           <h2>Turni per dipendente</h2>
           ${mobile ? `<ul class="plain-list emp-cards">${empCards || '<li class="muted">Nessun dipendente.</li>'}</ul>` : `<div class="table-wrap flat"><table>
-            <thead><tr><th>Dipendente</th><th class="num">Mattine</th><th class="num">Pomeriggi</th><th class="num">Totale</th>
+            <thead><tr><th>Dipendente</th><th class="num">Mattine</th><th class="num">Pomeriggi</th><th class="num">Intere</th><th class="num">Giorni</th>
               <th class="num">Ferie</th><th class="num">Assenze</th><th>Equilibrio mattine/pomeriggi</th></tr></thead>
-            <tbody>${empRows || '<tr><td colspan="7" class="muted">Nessun dipendente.</td></tr>'}</tbody></table></div>`}
-          <p class="hint">Ferie e assenze sono in giorni. L'equilibrio è pari quando mattine e pomeriggi si equivalgono.</p>
+            <tbody>${empRows || '<tr><td colspan="8" class="muted">Nessun dipendente.</td></tr>'}</tbody></table></div>`}
+          <p class="hint">Giorni = giorni lavorati (mattine + pomeriggi + giornate intere). Ferie e assenze sono in giorni.
+            L'equilibrio confronta mattine e pomeriggi.</p>
         </section>
       </div>` : '<div class="empty"><p>Nessun turno pianificato in questo periodo.</p></div>'}`;
+  }
+
+  /** Dati del PDF di riepilogo per il punto vendita o il reparto scelto. */
+  function summaryPdfData() {
+    const { store, dept, range, emp, cover, depts, totals } = summaryData();
+    const scope = dept ? `${deptName(dept)} - ${storeName(store)}` : storeName(store);
+    return {
+      title: `Riepilogo turni - ${scope}`,
+      subtitle: plain(range.label),
+      kpis: [
+        ['Copertura', `${totals.pct}%`, `${totals.have} di ${totals.need} posti`],
+        ['Posti scoperti', String(totals.need - totals.have), ''],
+        ['Mattine · pomeriggi · intere', `${totals.M} · ${totals.P} · ${totals.G}`, 'turni assegnati'],
+        ['Ferie · assenze', `${totals.F} · ${totals.A}`, 'giorni'],
+      ],
+      coverage: dept ? null : depts.map((d) => {
+        const c = cover[d.id] || { need: 0, have: 0 };
+        return [d.name, String(c.need), String(c.have), String(c.need - c.have), `${c.need ? Math.round((c.have / c.need) * 100) : 0}%`];
+      }),
+      sections: depts.map((d) => ({
+        title: d.name,
+        rows: deptEmployees(store, d.id).map((e) => {
+          const x = emp[e.id] || ZERO;
+          return [e.name, x.M, x.P, x.G, x.M + x.P + x.G, x.F, x.A, balanceText(x.M, x.P)].map(String);
+        }),
+      })).filter((sct) => sct.rows.length),
+      footer: `Generato il ${fmtLong(new Date())}`,
+      fileName: `Riepilogo_${fileSafe(storeName(store))}_${dept ? fileSafe(deptName(dept)) + '_' : ''}${fileSafe(plain(range.label))}.pdf`,
+    };
   }
 
   // ---------------------------- Personale ----------------------------
@@ -960,7 +1045,7 @@
         const days = dates.map((_, d) => {
           const w = working[d][e.id];
           if (!w) return OFF_NAMES[manualOf(sched, e.id, d)] || 'Riposo';
-          if (w.shift === 'M') m++; else p++;
+          if (w.shift === 'M') m++; else if (w.shift === 'P') p++;
           return `${SHIFT_NAMES[w.shift]} ${timeRange(w.shift)}${w.dept !== e.dept ? ` (${deptName(w.dept)})` : ''}`;
         });
         rows.push([dept.name, e.name, ...days, m, p]);
@@ -988,7 +1073,7 @@
     const sched = getSchedule(store, ui.week);
     const dates = weekDates(ui.week);
     const working = dates.map((_, d) => workingOn(sched, d));
-    const times = { M: plain(timeRange('M')), P: plain(timeRange('P')) };
+    const times = { M: plain(timeRange('M')), P: plain(timeRange('P')), G: plain(timeRange('G')) };
     const depts = DEPTS.filter((d) => (!ui.dept || d.id === ui.dept) && deptEmployees(store, d.id).length);
     const sections = depts.map((dept) => ({
       title: dept.name,
@@ -996,7 +1081,7 @@
         let total = 0;
         const cells = dates.map((_, d) => {
           const c = cellState(e, d, sched, working, null);
-          if (c.kind === 'M' || c.kind === 'P') {
+          if (c.kind === 'M' || c.kind === 'P' || c.kind === 'G') {
             total++;
             const where = working[d][e.id].dept !== e.dept ? ` (${deptName(working[d][e.id].dept)})` : '';
             return { kind: c.kind, text: `${SHIFT_NAMES[c.kind]}\n${times[c.kind]}${where}` };
@@ -1012,7 +1097,7 @@
       subtitle: `Settimana da lunedì ${fmtLong(dates[0])} a domenica ${fmtLong(dates[6])}`,
       days: dates.map((dt, i) => `${DAY_SHORT[i]} ${fmtShort(dt)}`),
       sections,
-      legend: `Mattino ${times.M}  ·  Pomeriggio ${times.P}`,
+      legend: `Mattino ${times.M}  ·  Pomeriggio ${times.P}  ·  Giornata intera ${times.G}`,
       footer: `Generato il ${fmtLong(new Date())}`,
       fileName: `Turni_${fileSafe(storeName(store))}_${ui.dept ? fileSafe(deptName(ui.dept)) + '_' : ''}${ui.week}.pdf`,
     };
@@ -1040,15 +1125,17 @@
     wrap.querySelector('[data-answer="share"]').focus();
   }
 
-  async function exportPDF(btn) {
-    const data = pdfData();
+  const exportPDF = (btn) => sharePDF(btn, pdfData(), TurniPDF.build);
+  const exportSummaryPDF = (btn) => sharePDF(btn, summaryPdfData(), TurniPDF.buildSummary);
+
+  async function sharePDF(btn, data, builder) {
     if (!data.sections.length) return toast('Nessun dipendente da inserire nel PDF');
     const label = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Preparo il PDF…';
     let blob;
     try {
-      blob = await TurniPDF.build(data);
+      blob = await builder(data);
     } catch (e) {
       toast('Impossibile creare il PDF: controlla la connessione e riprova');
       return;
@@ -1080,7 +1167,7 @@
     state.employees = state.employees.filter((x) => x.id !== e.id);
     for (const st of Object.keys(state.schedules)) {
       for (const w of Object.values(state.schedules[st])) {
-        for (const day of w.days) for (const dp of Object.values(day)) for (const s of ['M', 'P']) dp[s] = dp[s].filter((id) => id !== e.id);
+        for (const day of w.days) for (const dp of Object.values(day)) for (const s of SLOTS) dp[s] = (dp[s] || []).filter((id) => id !== e.id);
         if (w.manual) delete w.manual[e.id];
       }
     }
@@ -1135,6 +1222,7 @@
       case 'period': ui.period = el.dataset.period; saveUI(); return render();
       case 'day': ui.day = Number(el.dataset.day); saveUI(); return render();
       case 'pdf': return exportPDF(el);
+      case 'summary-pdf': return exportSummaryPDF(el);
       case 'period-prev': return shiftPeriod(-1);
       case 'period-next': return shiftPeriod(1);
       case 'summary-dept': ui.dept = el.dataset.dept; saveUI(); return render();
@@ -1154,7 +1242,7 @@
           sched.days.forEach((day, d) => {
             for (const dp of Object.keys(day)) {
               if (ui.dept && dp !== ui.dept) continue;
-              for (const s of ['M', 'P']) day[dp][s] = day[dp][s].filter((id) => manualOf(sched, id, d) === s);
+              for (const s of SLOTS) day[dp][s] = (day[dp][s] || []).filter((id) => manualOf(sched, id, d) === s);
             }
           });
         });
@@ -1219,6 +1307,8 @@
     const store = ui.store;
     switch (el.dataset.action) {
       case 'use-history': state.settings.useHistory = el.checked; return save();
+      case 'sum-month': ui.sumMonth = Number(el.value); saveUI(); return render();
+      case 'sum-year': ui.sumYear = Number(el.value); saveUI(); return render();
       case 'need': {
         const v = Math.max(0, Math.min(50, parseInt(el.value, 10) || 0));
         state.requirements[store][ui.dept][el.dataset.day][el.dataset.shift] = v;

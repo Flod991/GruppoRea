@@ -12,12 +12,14 @@ In alto si scelgono **punto vendita** e **reparto**. Le schede sono quattro.
 
 - **Turni**: la settimana del reparto scelto. La prima riga contiene le persone richieste per ogni giorno (M = mattino, P = pomeriggio):
   basta cambiare il numero. *Genera turni* compila la settimana. Toccando una casella si sceglie
-  **Mattino, Pomeriggio, Riposo, Ferie o Assente**: la casella viene segnata con un pallino ed è considerata *inserita a mano*.
+  **Mattino, Pomeriggio, Giornata intera, Riposo, Ferie o Assente**: la casella viene segnata con un pallino ed è considerata *inserita a mano*.
   Generando o rigenerando, le caselle inserite a mano **non vengono mai cambiate**: i turni contano per la copertura,
   e riposo, ferie e assenze tengono libero il dipendente. *Automatico* restituisce la casella al generatore.
+  La giornata intera (dall'inizio del mattino alla fine del pomeriggio) copre entrambi i turni e vale un giorno di lavoro.
   L'ultima riga mostra la copertura. Scegliendo *Tutti i reparti* si vede la panoramica del punto vendita, con chi è in ferie o assente.
-- **Riepilogo**: per settimana, mese, anno o tutto lo storico mostra copertura, posti scoperti, copertura per reparto e,
-  per ogni dipendente, mattine, pomeriggi, totale, giorni di ferie e di assenza ed equilibrio tra mattine e pomeriggi.
+- **Riepilogo**: per settimana, mese (scelto da un elenco: settembre, ottobre…), anno o tutto lo storico mostra copertura, posti scoperti, copertura per reparto e,
+  per ogni dipendente, mattine, pomeriggi, giornate intere, giorni lavorati, ferie, assenze ed equilibrio tra mattine e pomeriggi.
+  **PDF riepilogo** crea lo stesso riepilogo in PDF: del punto vendita (con *Tutti i reparti*) o del singolo reparto.
 - **Personale**: aggiunta e modifica dei dipendenti, con i turni massimi a settimana e i giorni fissi in cui non sono disponibili
   (riposo, solo mattino, solo pomeriggio).
 - **Impostazioni**: orari dei turni, regole di generazione, copia delle persone richieste su altre sedi, backup.

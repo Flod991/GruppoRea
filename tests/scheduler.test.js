@@ -139,3 +139,49 @@ test('ferie e assenze riducono i turni massimi della settimana', () => {
   const c = countShifts(schedule)['ortofrutta-0'] || { M: 0, P: 0 };
   assert.ok(c.M + c.P <= 3, `con 2 giorni di ferie al massimo 3 turni, trovati ${c.M + c.P}`);
 });
+
+test('la giornata intera inserita a mano copre mattino e pomeriggio e vale un giorno', () => {
+  const employees = staff('salumeria', 3);
+  const fixed = { 'salumeria-0': { 0: 'G', 1: 'G' } };
+  const { schedule, shortages } = generate({ employees, requirements: { salumeria: week(1, 1) }, fixed });
+  assert.deepEqual(shortages, []);
+  for (const d of [0, 1]) {
+    assert.deepEqual(schedule[d].salumeria.G, ['salumeria-0']);
+    assert.equal(schedule[d].salumeria.M.length, 0, 'il mattino è già coperto dalla giornata intera');
+    assert.equal(schedule[d].salumeria.P.length, 0, 'il pomeriggio è già coperto dalla giornata intera');
+  }
+  const c = countShifts(schedule)['salumeria-0'];
+  assert.equal(c.G, 2);
+  assert.ok(c.M + c.P + c.G <= 5, 'le giornate intere contano nei giorni massimi');
+});
+
+test('prove casuali: copertura mai oltre il richiesto, vincoli e caselle manuali rispettati', () => {
+  for (let seed = 1; seed <= 300; seed++) {
+    const n = 3 + (seed % 6);
+    const employees = Array.from({ length: n }, (_, i) => ({
+      id: `e${i}`,
+      dept: 'x',
+      maxShifts: 4 + (i % 3),
+      availability: Array.from({ length: 7 }, (_, d) => ['', '', '', 'M', 'P', 'X'][(i * 7 + d + seed) % 6]),
+    }));
+    const fixed = seed % 2 ? { e0: { 1: 'G', 2: 'F' }, e1: { 0: 'P', 3: 'A' } } : {};
+    const req = Array.from({ length: 7 }, (_, d) => ({ M: 1 + ((d + seed) % 2), P: 1 + (seed % 2) }));
+    const { schedule } = generate({ employees, requirements: { x: req }, fixed, seed });
+    schedule.forEach((day, d) => {
+      const c = day.x;
+      const g = c.G.length;
+      assert.ok(c.M.length + g <= Math.max(req[d].M, g), `seed ${seed} giorno ${d}: troppe mattine`);
+      assert.ok(c.P.length + g <= Math.max(req[d].P, g), `seed ${seed} giorno ${d}: troppi pomeriggi`);
+      const seen = new Set();
+      for (const s of ['M', 'P', 'G']) {
+        for (const id of c[s]) {
+          assert.ok(!seen.has(id), `seed ${seed}: ${id} due volte il giorno ${d}`);
+          seen.add(id);
+          const f = (fixed[id] || {})[d];
+          if (f) assert.equal(f, s, `seed ${seed}: casella manuale di ${id} cambiata`);
+          else assert.ok(canWork(employees.find((e) => e.id === id), d, s), `seed ${seed}: ${id} non disponibile`);
+        }
+      }
+    });
+  }
+});

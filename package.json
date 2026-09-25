@@ -1,0 +1,10 @@
+{
+  "name": "turni-gruppo-rea",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gestione turni dei dipendenti per i punti vendita Decò e MD",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "npx --yes serve ."
+  }
+}

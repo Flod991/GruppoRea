@@ -1,0 +1,44 @@
+name: Verifica online
+
+# Controlla il sito pubblicato e il database. Si avvia a mano da Actions → Verifica online → Run workflow.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/verify.yml
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sito GitHub Pages
+        run: |
+          set -e
+          BASE="https://flod991.github.io/GruppoRea"
+          for f in "" js/config.js js/app.js js/storage.js js/pdf.js js/vendor/supabase-2.116.0.js js/vendor/jspdf-4.2.1.umd.min.js; do
+            code=$(curl -s -o /tmp/out -w "%{http_code}" "$BASE/$f")
+            echo "$code  $BASE/$f"
+            test "$code" = "200"
+          done
+          curl -s "$BASE/" | grep -q "Turni Gruppo Rea" && echo "OK: pagina dell'app"
+          curl -s "$BASE/js/config.js" | grep -q "teiiugkpvtigzoipywhl" && echo "OK: config con il database"
+      - name: Database Supabase
+        run: |
+          set -e
+          URL=$(grep -o "https://[a-z0-9]*\.supabase\.co" js/config.js)
+          KEY=$(grep -o "sb_publishable_[A-Za-z0-9_-]*" js/config.js)
+          echo "--- tabella turni_dati (senza accesso deve rispondere 200 con [] )"
+          code=$(curl -s -o /tmp/sel -w "%{http_code}" "$URL/rest/v1/turni_dati?select=id&limit=1" -H "apikey: $KEY")
+          echo "HTTP $code: $(cat /tmp/sel)"
+          test "$code" = "200" || { echo "ERRORE: tabella mancante o chiave non valida. Eseguire supabase/schema.sql"; exit 1; }
+          test "$(cat /tmp/sel)" = "[]" || { echo "ERRORE: i dati sono leggibili senza accesso"; exit 1; }
+          echo "--- scrittura senza accesso (deve essere rifiutata)"
+          code=$(curl -s -o /tmp/ins -w "%{http_code}" -X POST "$URL/rest/v1/turni_dati" -H "apikey: $KEY" \
+            -H "Content-Type: application/json" -d '{"id":"verifica","data":{}}')
+          echo "HTTP $code: $(cat /tmp/ins)"
+          test "$code" = "401" -o "$code" = "403" || { echo "ERRORE: scrittura consentita senza accesso"; exit 1; }
+          echo "--- impostazioni di accesso"
+          curl -s "$URL/auth/v1/settings" -H "apikey: $KEY" | tee /tmp/auth; echo
+          grep -q '"email":true' /tmp/auth && echo "OK: accesso con email attivo" || echo "ATTENZIONE: accesso con email non attivo"
+          grep -q '"disable_signup":true' /tmp/auth && echo "OK: registrazione libera disattivata" || echo "ATTENZIONE: chiunque può registrarsi, disattivare 'Allow new users to sign up'"

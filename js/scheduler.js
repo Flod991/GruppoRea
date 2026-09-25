@@ -12,6 +12,11 @@
  *      anche tenendo conto dello storico delle settimane precedenti;
  *   3. evitare, quando possibile, il pomeriggio seguito dal mattino del giorno dopo.
  *
+ * Le caselle inserite a mano (opts.fixed) non vengono mai modificate: i turni
+ * M/P fissati contano per la copertura, mentre riposo, ferie e assenze rendono
+ * il dipendente non disponibile quel giorno. Ferie e assenze riducono anche il
+ * numero massimo di turni della settimana.
+ *
  * Funziona sia nel browser (window.Scheduler) sia in Node (require).
  */
 (function (root, factory) {
@@ -59,6 +64,7 @@
    * @param {Array<{id:string, dept:string, maxShifts?:number, availability?:string[]}>} opts.employees
    * @param {Object<string, Array<{M:number,P:number}>>} opts.requirements  reparto -> giorno -> fabbisogno
    * @param {Object<string, {M:number,P:number}>} [opts.history]  turni già svolti in passato per dipendente
+   * @param {Object<string, Object<number,string>>} [opts.fixed]  dipendente -> giorno -> 'M'|'P'|'R'|'F'|'A' inseriti a mano
    * @param {number} [opts.days=7]
    * @param {number} [opts.defaultMaxShifts=5]
    * @param {number} [opts.seed=1]  cambia il seed per ottenere soluzioni alternative equivalenti
@@ -69,6 +75,7 @@
       employees = [],
       requirements = {},
       history = {},
+      fixed = {},
       days = 7,
       defaultMaxShifts = 5,
       seed = 1,
@@ -83,22 +90,34 @@
     for (const e of employees) (byDept[e.dept] = byDept[e.dept] || []).push(e);
 
     for (const dept of Object.keys(requirements)) {
-      const res = solveDept(dept, byDept[dept] || [], requirements[dept], history, days, defaultMaxShifts, rand);
+      const res = solveDept(dept, byDept[dept] || [], requirements[dept], history, fixed, days, defaultMaxShifts, rand);
       for (let d = 0; d < days; d++) schedule[d][dept] = res.days[d];
       shortages.push(...res.shortages);
     }
     return { schedule, shortages };
   }
 
-  function solveDept(dept, emps, req, history, days, defaultMax, rand) {
+  function solveDept(dept, emps, req, history, fixed, days, defaultMax, rand) {
     const n = emps.length;
-    const max = emps.map((e) => maxShiftsOf(e, defaultMax));
+    const fix = emps.map((e) => fixed[e.id] || {});
+    const locked = (i, d) => !!fix[i][d];
+    // Può ricevere il turno s il giorno d: casella non fissata a mano e dipendente disponibile.
+    const ok = (i, d, s) => !locked(i, d) && canWork(emps[i], d, s);
+    const max = emps.map((e, i) => {
+      let away = 0;
+      for (let d = 0; d < days; d++) if (fix[i][d] === 'F' || fix[i][d] === 'A') away++;
+      return Math.max(0, maxShiftsOf(e, defaultMax) - away);
+    });
     const histDiff = emps.map((e) => {
       const h = history[e.id] || {};
       return (h.M || 0) - (h.P || 0);
     });
     // work[i][d] = null | 'M' | 'P'
-    const work = emps.map(() => new Array(days).fill(null));
+    const work = emps.map((_, i) => {
+      const row = new Array(days).fill(null);
+      for (let d = 0; d < days; d++) if (fix[i][d] === 'M' || fix[i][d] === 'P') row[d] = fix[i][d];
+      return row;
+    });
     const shortages = [];
 
     const count = (i) => {
@@ -113,19 +132,21 @@
     // ---- 1. Costruzione greedy, giorno per giorno ----
     for (let d = 0; d < days; d++) {
       const need = { M: need0(req, d, 'M'), P: need0(req, d, 'P') };
+      // I turni fissati a mano coprono già parte del fabbisogno.
+      for (let i = 0; i < n; i++) if (locked(i, d) && work[i][d]) need[work[i][d]] = Math.max(0, need[work[i][d]] - 1);
       // Si riempie prima il turno con meno candidati per posto richiesto.
       const order = SHIFTS.slice().sort((a, b) => ratio(a) - ratio(b));
       function ratio(s) {
         if (!need[s]) return Infinity;
         let c = 0;
-        for (let i = 0; i < n; i++) if (canWork(emps[i], d, s)) c++;
+        for (let i = 0; i < n; i++) if (ok(i, d, s)) c++;
         return c / need[s];
       }
       for (const s of order) {
         for (let k = 0; k < need[s]; k++) {
           let best = -1, bestScore = Infinity;
           for (let i = 0; i < n; i++) {
-            if (work[i][d] || !canWork(emps[i], d, s)) continue;
+            if (work[i][d] || !ok(i, d, s)) continue;
             const { m, p } = count(i);
             if (m + p >= max[i]) continue;
             const diff = histDiff[i] + m - p; // >0: più mattine che pomeriggi
@@ -169,9 +190,9 @@
       for (let d = 0; d < days; d++) {
         // a) scambio mattino/pomeriggio tra due dipendenti nello stesso giorno
         for (let a = 0; a < n; a++) {
-          if (work[a][d] !== 'M' || !canWork(emps[a], d, 'P')) continue;
+          if (work[a][d] !== 'M' || !ok(a, d, 'P')) continue;
           for (let b = 0; b < n; b++) {
-            if (work[b][d] !== 'P' || !canWork(emps[b], d, 'M')) continue;
+            if (work[b][d] !== 'P' || !ok(b, d, 'M')) continue;
             work[a][d] = 'P'; work[b][d] = 'M';
             const v = objective();
             if (v < current - 1e-9) { current = v; improved = true; break; }
@@ -181,9 +202,9 @@
         // b) sostituzione di un assegnato con un collega libero quel giorno
         for (let a = 0; a < n; a++) {
           const s = work[a][d];
-          if (!s) continue;
+          if (!s || locked(a, d)) continue;
           for (let b = 0; b < n; b++) {
-            if (b === a || work[b][d] || !canWork(emps[b], d, s)) continue;
+            if (b === a || work[b][d] || !ok(b, d, s)) continue;
             const { m, p } = count(b);
             if (m + p >= max[b]) continue;
             work[a][d] = null; work[b][d] = s;
@@ -204,8 +225,7 @@
             // a fa s il giorno d e t il giorno e: cerco b che fa t il giorno d e s il giorno e
             for (let b = 0; b < n; b++) {
               if (b === a || work[b][d] !== t || work[b][e] !== s) continue;
-              if (!canWork(emps[a], d, t) || !canWork(emps[b], d, s) ||
-                  !canWork(emps[a], e, s) || !canWork(emps[b], e, t)) continue;
+              if (!ok(a, d, t) || !ok(b, d, s) || !ok(a, e, s) || !ok(b, e, t)) continue;
               work[a][d] = t; work[b][d] = s; work[a][e] = s; work[b][e] = t;
               const v = objective();
               if (v < current - 1e-9) { current = v; improved = true; break; }

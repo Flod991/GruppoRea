@@ -30,6 +30,23 @@
     { v: 'P', short: 'Solo P' },
     { v: 'X', short: 'Riposo' },
   ];
+  // Valori di una casella inserita a mano. '' = automatico (decide il generatore).
+  const CELL_OPTIONS = [
+    { v: 'M', label: 'Mattino' },
+    { v: 'P', label: 'Pomeriggio' },
+    { v: 'R', label: 'Riposo' },
+    { v: 'F', label: 'Ferie' },
+    { v: 'A', label: 'Assente' },
+    { v: '', label: 'Automatico' },
+  ];
+  const OFF_NAMES = { R: 'Riposo', F: 'Ferie', A: 'Assente' };
+  const PERIODS = [
+    { v: 'week', label: 'Settimana' },
+    { v: 'month', label: 'Mese' },
+    { v: 'year', label: 'Anno' },
+    { v: 'all', label: 'Tutto' },
+  ];
+  const MONTHS = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
   const UI_KEY = 'gruppoRea.turni.ui';
   // Nella versione pubblicata su claude.ai stampa e download non sono disponibili.
   const EMBED = !!window.TURNI_EMBED;
@@ -204,12 +221,13 @@
   }
 
   function loadUI() {
-    const def = { tab: 'plan', store: STORES[0].id, dept: DEPTS[0].id, week: toISO(mondayOf(new Date())) };
+    const def = { tab: 'plan', store: STORES[0].id, dept: DEPTS[0].id, week: toISO(mondayOf(new Date())), period: 'week' };
     try {
       const ui = Object.assign(def, JSON.parse(localStorage.getItem(UI_KEY) || '{}'));
       if (!STORES.some((x) => x.id === ui.store)) ui.store = def.store;
       if (ui.dept && !DEPTS.some((x) => x.id === ui.dept)) ui.dept = DEPTS[0].id;
-      if (!['plan', 'staff', 'settings'].includes(ui.tab)) ui.tab = 'plan';
+      if (!['plan', 'summary', 'staff', 'settings'].includes(ui.tab)) ui.tab = 'plan';
+      if (!PERIODS.some((x) => x.v === ui.period)) ui.period = 'week';
       return ui;
     } catch (e) {
       return def;
@@ -258,6 +276,23 @@
     return day[dept];
   }
 
+  /** Valore inserito a mano per un dipendente in un giorno ('' se automatico). */
+  const manualOf = (sched, empId, d) => (sched && sched.manual && sched.manual[empId] ? sched.manual[empId][d] || '' : '');
+
+  /** Imposta a mano la casella di un dipendente; '' la restituisce al generatore. */
+  function setCell(emp, d, value) {
+    const sched = ensureSchedule(ui.store, ui.week);
+    for (const dept of Object.keys(sched.days[d])) {
+      for (const s of ['M', 'P']) sched.days[d][dept][s] = sched.days[d][dept][s].filter((id) => id !== emp.id);
+    }
+    if (value === 'M' || value === 'P') cellOf(sched, d, emp.dept)[value].push(emp.id);
+    sched.manual = sched.manual || {};
+    const m = (sched.manual[emp.id] = sched.manual[emp.id] || {});
+    if (value) m[d] = value;
+    else delete m[d];
+    if (!Object.keys(m).length) delete sched.manual[emp.id];
+  }
+
   const assigned = (sched, d, dept, s) => (sched && sched.days[d] && sched.days[d][dept] ? sched.days[d][dept][s] || [] : []);
 
   /** Mappa id dipendente -> { dept, shift } per un giorno. */
@@ -299,9 +334,13 @@
     const requirements = {};
     for (const d of depts) requirements[d] = state.requirements[store][d];
     const staff = storeEmployees(store).filter((e) => depts.includes(e.dept));
+    const current = getSchedule(store, week);
+    const fixed = {};
+    for (const e of staff) if (current && current.manual && current.manual[e.id]) fixed[e.id] = current.manual[e.id];
     const res = Scheduler.generate({
       employees: staff,
       requirements,
+      fixed,
       history: state.settings.useHistory ? historyCounts(store, week) : {},
       defaultMaxShifts: Number(state.settings.defaultMaxShifts) || 5,
       seed: Math.floor(Math.random() * 1e9),
@@ -309,10 +348,10 @@
     const sched = ensureSchedule(store, week);
     const ids = new Set(staff.map((e) => e.id));
     res.schedule.forEach((day, d) => {
-      // Toglie i dipendenti rigenerati da altri reparti in cui erano stati spostati a mano.
+      // Toglie i dipendenti rigenerati da altri reparti (dati di versioni precedenti), salvo scelte manuali.
       for (const other of Object.keys(sched.days[d])) {
         if (depts.includes(other)) continue;
-        for (const s of ['M', 'P']) sched.days[d][other][s] = sched.days[d][other][s].filter((id) => !ids.has(id));
+        for (const s of ['M', 'P']) sched.days[d][other][s] = sched.days[d][other][s].filter((id) => !ids.has(id) || manualOf(sched, id, d));
       }
       for (const dept of depts) sched.days[d][dept] = day[dept];
     });
@@ -334,7 +373,8 @@
     document.getElementById('dept-select').innerHTML = DEPTS
       .map((d) => `<option value="${d.id}"${d.id === ui.dept ? ' selected' : ''}>${esc(d.name)}</option>`).join('')
       + `<option value=""${ui.dept ? '' : ' selected'}>Tutti i reparti</option>`;
-    const renderers = { plan: renderPlan, staff: renderStaff, settings: renderSettings };
+    closePicker();
+    const renderers = { plan: renderPlan, summary: renderSummary, staff: renderStaff, settings: renderSettings };
     view.innerHTML = renderers[ui.tab]();
   }
 
@@ -398,38 +438,41 @@
         <button class="btn primary" data-action="goto-staff">Aggiungi personale</button></div>`;
     }
     const working = dates.map((_, d) => workingOn(sched, d));
-    const hist = historyCounts(store);
 
     const head = `<tr><th class="sticky">Dipendente</th>
       ${dates.map((dt, i) => `<th class="day">${DAY_SHORT[i]} <span class="date">${fmtShort(dt)}</span></th>`).join('')}
-      <th class="num">Mat.</th><th class="num">Pom.</th><th>Equilibrio totale</th></tr>`;
+      <th class="num">Mat.</th><th class="num">Pom.</th></tr>`;
 
     const needRow = `<tr class="need-row no-print"><th class="sticky">Persone richieste</th>
       ${dates.map((_, d) => `<td><div class="need-pair">${['M', 'P'].map((s) => `
         <label class="need ${s}"><span>${s}</span><input type="number" inputmode="numeric" min="0" max="50"
           value="${need(store, dept, d, s)}" data-action="need" data-day="${d}" data-shift="${s}"
           aria-label="${SHIFT_NAMES[s]} di ${DAY_NAMES[d]}: persone richieste"></label>`).join('')}</div></td>`).join('')}
-      <td colspan="3" class="muted small">M = mattino ${esc(timeRange('M'))}<br>P = pomeriggio ${esc(timeRange('P'))}</td></tr>`;
+      <td colspan="2"></td></tr>`;
 
     const rows = emps.map((e) => {
       let m = 0, p = 0;
       const cells = dates.map((_, d) => {
         const w = working[d][e.id];
-        const fixedOff = (e.availability || [])[d] === 'X';
-        let cls = 'off', label = fixedOff ? 'Riposo' : '—';
+        const man = manualOf(sched, e.id, d);
+        let cls = 'off';
+        let label = (e.availability || [])[d] === 'X' ? 'Riposo' : '—';
         if (w) {
           if (w.shift === 'M') m++; else p++;
           cls = w.shift;
           label = w.dept === dept ? SHIFT_NAMES[w.shift] : `${w.shift} · ${deptName(w.dept)}`;
           if (w.dept !== dept) cls += ' elsewhere';
           if (!Scheduler.canWork(e, d, w.shift)) cls += ' conflict';
+        } else if (OFF_NAMES[man]) {
+          cls = man === 'R' ? 'off rest' : man;
+          label = OFF_NAMES[man];
         }
-        return `<td><button class="cell ${cls}" data-action="cycle" data-id="${e.id}" data-day="${d}"
-          aria-label="${esc(e.name)}, ${DAY_NAMES[d]}: ${esc(label)}. Premi per cambiare">${esc(label)}</button></td>`;
+        if (man) cls += ' manual';
+        return `<td><button class="cell ${cls}" data-action="pick" data-id="${e.id}" data-day="${d}" aria-haspopup="menu"
+          aria-label="${esc(e.name)}, ${DAY_NAMES[d]}: ${esc(label)}${man ? ', inserito a mano' : ''}. Premi per cambiare">${esc(label)}</button></td>`;
       }).join('');
-      const h = hist[e.id] || { M: 0, P: 0 };
       return `<tr><th class="sticky name">${esc(e.name)}</th>${cells}
-        <td class="num">${m}</td><td class="num">${p}</td><td>${balanceCell(h.M, h.P)}</td></tr>`;
+        <td class="num">${m}</td><td class="num">${p}</td></tr>`;
     }).join('');
 
     const cover = `<tr class="cover-row"><th class="sticky">Copertura</th>
@@ -439,13 +482,72 @@
         const have = assigned(sched, d, dept, s).length;
         return `<span class="cov ${have >= n ? 'ok' : 'bad'}">${s} ${have}/${n}</span>`;
       }).join(' ') || '<span class="muted small">Chiuso</span>'}</td>`).join('')}
-      <td colspan="3"></td></tr>`;
+      <td colspan="2"></td></tr>`;
 
     return `<div class="table-wrap"><table class="week dept-week">
         <thead>${head}</thead><tbody>${needRow}${rows}${cover}</tbody></table></div>
-      <p class="hint no-print">Premi una casella per cambiare turno: — → Mattino → Pomeriggio → —.
-        L'equilibrio totale confronta mattine e pomeriggi di tutte le settimane salvate: vicino a pari è bilanciato.</p>`;
+      <div class="legend no-print">
+        <span><i class="sw M"></i>Mattino ${esc(timeRange('M'))}</span>
+        <span><i class="sw P"></i>Pomeriggio ${esc(timeRange('P'))}</span>
+        <span><i class="sw F"></i>Ferie</span>
+        <span><i class="sw A"></i>Assente</span>
+        <span><i class="sw manual"></i>Inserito a mano: la generazione non lo cambia</span>
+      </div>`;
   }
+
+  /** Menu di scelta per una casella. */
+  function openPicker(btn) {
+    closePicker();
+    const emp = empById(btn.dataset.id);
+    const d = Number(btn.dataset.day);
+    if (!emp) return;
+    const cur = manualOf(getSchedule(ui.store, ui.week), emp.id, d);
+    const menu = document.createElement('div');
+    menu.className = 'picker-menu';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML = `<div class="picker-title">${esc(emp.name)} · ${DAY_NAMES[d]}</div>
+      ${CELL_OPTIONS.map((o) => `<button role="menuitem" class="opt ${o.v || 'auto'}${o.v === cur ? ' current' : ''}" data-value="${o.v}">
+        <i class="sw ${o.v || 'auto'}"></i>${o.label}${o.v === '' ? '<small>decide la generazione</small>' : ''}</button>`).join('')}`;
+    document.body.appendChild(menu);
+    const r = btn.getBoundingClientRect();
+    const mw = menu.offsetWidth;
+    const mh = menu.offsetHeight;
+    let left = Math.min(r.left, window.innerWidth - mw - 8);
+    let top = r.bottom + 4;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${top}px`;
+    menu.addEventListener('click', (ev) => {
+      const o = ev.target.closest('[data-value]');
+      if (!o) return;
+      setCell(emp, d, o.dataset.value);
+      closePicker();
+      save();
+      render();
+      const again = view.querySelector(`[data-action="pick"][data-id="${emp.id}"][data-day="${d}"]`);
+      if (again) again.focus();
+    });
+    menu.addEventListener('keydown', (ev) => {
+      const items = [...menu.querySelectorAll('[data-value]')];
+      const i = items.indexOf(document.activeElement);
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+      if (ev.key === 'Escape' || ev.key === 'Tab') { closePicker(); btn.focus(); }
+    });
+    openPicker.at = Date.now();
+    (menu.querySelector('.current') || menu.querySelector('[data-value]')).focus();
+  }
+
+  function closePicker() {
+    const m = document.querySelector('.picker-menu');
+    if (m) m.remove();
+  }
+  document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('.picker-menu') && !ev.target.closest('[data-action="pick"]')) closePicker();
+  });
+  window.addEventListener('resize', closePicker);
+  // Lo scorrimento chiude il menu, ma non quello residuo subito dopo il tocco che lo ha aperto.
+  document.addEventListener('scroll', () => { if (Date.now() - (openPicker.at || 0) > 400) closePicker(); }, true);
 
   function balanceCell(m, p) {
     const tot = m + p;
@@ -471,12 +573,144 @@
           const cls = ids.length < n ? 'bad' : '';
           return `<div class="ov ${s} ${cls}"><b>${s} ${ids.length}/${n}</b>${names ? `<span>${names}</span>` : ''}</div>`;
         }).join('');
-        return `<td>${parts || '<span class="muted small">Chiuso</span>'}</td>`;
+        const away = deptEmployees(store, dept.id)
+          .filter((e) => ['F', 'A'].includes(manualOf(sched, e.id, d)))
+          .map((e) => `${esc(e.name)} (${manualOf(sched, e.id, d) === 'F' ? 'ferie' : 'assente'})`);
+        const awayHtml = away.length ? `<div class="ov-away">${away.join('<br>')}</div>` : '';
+        return `<td>${parts || '<span class="muted small">Chiuso</span>'}${awayHtml}</td>`;
       }).join('');
       return `<tr><th class="sticky"><button class="link strong" data-action="open-dept" data-dept="${dept.id}">${esc(dept.name)}</button></th>${cells}</tr>`;
     }).join('');
     return `<div class="table-wrap"><table class="week overview"><thead>${head}</thead><tbody>${rows}</tbody></table></div>
       <p class="hint no-print">Premi il nome di un reparto per aprirlo, modificare i turni e le persone richieste.</p>`;
+  }
+
+  // ---------------------------- Riepilogo ----------------------------
+  /** Intervallo di date del periodo scelto, ancorato alla settimana selezionata. */
+  function periodRange() {
+    const monday = fromISO(ui.week);
+    const thursday = addDays(monday, 3); // la settimana appartiene al mese del suo giovedì
+    const y = thursday.getFullYear();
+    const m = thursday.getMonth();
+    switch (ui.period) {
+      case 'week': return { from: monday, to: addDays(monday, 6), label: `${fmtShort(monday)} – ${fmtLong(addDays(monday, 6))}` };
+      case 'month': return { from: new Date(y, m, 1), to: new Date(y, m + 1, 0), label: `${MONTHS[m]} ${y}` };
+      case 'year': return { from: new Date(y, 0, 1), to: new Date(y, 11, 31), label: String(y) };
+      default: return { from: null, to: null, label: 'Tutte le settimane salvate' };
+    }
+  }
+
+  function shiftPeriod(dir) {
+    const thursday = addDays(fromISO(ui.week), 3);
+    let target;
+    if (ui.period === 'month') target = new Date(thursday.getFullYear(), thursday.getMonth() + dir, 15);
+    else if (ui.period === 'year') target = new Date(thursday.getFullYear() + dir, 6, 1);
+    else target = addDays(fromISO(ui.week), 7 * dir);
+    setWeek(target);
+  }
+
+  /** Conteggi per dipendente e copertura per reparto nel periodo. */
+  function periodStats(store, range) {
+    const emp = {};
+    const cover = {};
+    let days = 0;
+    const weeks = state.schedules[store] || {};
+    for (const w of Object.keys(weeks)) {
+      const sched = weeks[w];
+      for (let d = 0; d < 7; d++) {
+        const date = addDays(fromISO(w), d);
+        if (range.from && (date < range.from || date > range.to)) continue;
+        days++;
+        for (const dept of DEPTS) {
+          const c = (cover[dept.id] = cover[dept.id] || { need: 0, have: 0 });
+          for (const s of ['M', 'P']) {
+            const n = need(store, dept.id, d, s);
+            const ids = assigned(sched, d, dept.id, s);
+            c.need += n;
+            c.have += Math.min(n, ids.length);
+            for (const id of ids) {
+              const x = (emp[id] = emp[id] || { M: 0, P: 0, F: 0, A: 0 });
+              x[s]++;
+            }
+          }
+        }
+        for (const id of Object.keys(sched.manual || {})) {
+          const v = sched.manual[id][d];
+          if (v === 'F' || v === 'A') {
+            const x = (emp[id] = emp[id] || { M: 0, P: 0, F: 0, A: 0 });
+            x[v]++;
+          }
+        }
+      }
+    }
+    return { emp, cover, days };
+  }
+
+  function renderSummary() {
+    const store = ui.store;
+    const dept = ui.dept;
+    const range = periodRange();
+    const { emp, cover, days } = periodStats(store, range);
+    const depts = DEPTS.filter((d) => !dept || d.id === dept);
+    const zero = { M: 0, P: 0, F: 0, A: 0 };
+
+    const tabs = `<div class="segmented no-print" role="group" aria-label="Periodo">
+      ${PERIODS.map((x) => `<button class="${x.v === ui.period ? 'on' : ''}" aria-pressed="${x.v === ui.period}" data-action="period" data-period="${x.v}">${x.label}</button>`).join('')}
+    </div>`;
+    const nav = ui.period === 'all' ? '' : `<div class="week-nav no-print">
+      <button class="btn icon" data-action="period-prev" aria-label="Periodo precedente">‹</button>
+      <button class="btn icon" data-action="period-next" aria-label="Periodo successivo">›</button></div>`;
+
+    let totNeed = 0, totHave = 0;
+    for (const d of depts) { totNeed += (cover[d.id] || {}).need || 0; totHave += (cover[d.id] || {}).have || 0; }
+    const staffAll = storeEmployees(store).filter((e) => depts.some((d) => d.id === e.dept));
+    const sum = (k) => staffAll.reduce((a, e) => a + (emp[e.id] || zero)[k], 0);
+
+    const kpis = `<div class="kpis">
+      <div class="kpi"><span>Copertura</span><strong>${totNeed ? Math.round((totHave / totNeed) * 100) : 0}%</strong><small>${totHave} di ${totNeed} posti</small></div>
+      <div class="kpi"><span>Posti scoperti</span><strong class="${totNeed - totHave ? 'bad' : ''}">${totNeed - totHave}</strong><small>&nbsp;</small></div>
+      <div class="kpi"><span>Mattine / pomeriggi</span><strong>${sum('M')} / ${sum('P')}</strong><small>turni assegnati</small></div>
+      <div class="kpi"><span>Ferie · Assenze</span><strong>${sum('F')} · ${sum('A')}</strong><small>giorni</small></div>
+    </div>`;
+
+    const coverTable = dept ? '' : `<section class="panel">
+      <h2>Copertura per reparto</h2>
+      <div class="table-wrap flat"><table><thead><tr><th>Reparto</th><th class="num">Posti richiesti</th><th class="num">Coperti</th><th class="num">Scoperti</th><th>Copertura</th></tr></thead>
+      <tbody>${depts.map((d) => {
+        const c = cover[d.id] || { need: 0, have: 0 };
+        const pct = c.need ? Math.round((c.have / c.need) * 100) : 0;
+        return `<tr><td><button class="link strong" data-action="summary-dept" data-dept="${d.id}">${esc(d.name)}</button></td>
+          <td class="num">${c.need}</td><td class="num">${c.have}</td><td class="num ${c.need - c.have ? 'bad-text' : ''}">${c.need - c.have}</td>
+          <td><div class="meter"><span style="width:${pct}%"></span></div> <span class="small">${pct}%</span></td></tr>`;
+      }).join('')}</tbody></table></div></section>`;
+
+    const empRows = depts.map((d) => {
+      const list = deptEmployees(store, d.id);
+      if (!list.length) return '';
+      return (dept ? '' : `<tr class="group-row"><th colspan="7">${esc(d.name)}</th></tr>`) + list.map((e) => {
+        const x = emp[e.id] || zero;
+        return `<tr><td>${esc(e.name)}</td><td class="num">${x.M}</td><td class="num">${x.P}</td><td class="num"><strong>${x.M + x.P}</strong></td>
+          <td class="num">${x.F || ''}</td><td class="num">${x.A || ''}</td><td>${balanceCell(x.M, x.P)}</td></tr>`;
+      }).join('');
+    }).join('');
+
+    return `${sampleBanner()}
+      <section class="plan-head">
+        <div class="row">${tabs}${nav}</div>
+        <h1>Riepilogo ${esc(dept ? deptName(dept) : 'di tutti i reparti')} <span class="sub">· ${esc(storeName(store))} · ${esc(range.label)}</span></h1>
+      </section>
+      ${days ? `${kpis}
+      <div class="summary">
+        ${coverTable}
+        <section class="panel">
+          <h2>Turni per dipendente</h2>
+          <div class="table-wrap flat"><table>
+            <thead><tr><th>Dipendente</th><th class="num">Mattine</th><th class="num">Pomeriggi</th><th class="num">Totale</th>
+              <th class="num">Ferie</th><th class="num">Assenze</th><th>Equilibrio mattine/pomeriggi</th></tr></thead>
+            <tbody>${empRows || '<tr><td colspan="7" class="muted">Nessun dipendente.</td></tr>'}</tbody></table></div>
+          <p class="hint">Ferie e assenze sono in giorni. L'equilibrio è pari quando mattine e pomeriggi si equivalgono.</p>
+        </section>
+      </div>` : '<div class="empty"><p>Nessun turno pianificato in questo periodo.</p></div>'}`;
   }
 
   // ---------------------------- Personale ----------------------------
@@ -598,7 +832,7 @@
         let m = 0, p = 0;
         const days = dates.map((_, d) => {
           const w = working[d][e.id];
-          if (!w) return 'Riposo';
+          if (!w) return OFF_NAMES[manualOf(sched, e.id, d)] || 'Riposo';
           if (w.shift === 'M') m++; else p++;
           return `${SHIFT_NAMES[w.shift]} ${timeRange(w.shift)}${w.dept !== e.dept ? ` (${deptName(w.dept)})` : ''}`;
         });
@@ -622,24 +856,10 @@
     for (const st of Object.keys(state.schedules)) {
       for (const w of Object.values(state.schedules[st])) {
         for (const day of w.days) for (const dp of Object.values(day)) for (const s of ['M', 'P']) dp[s] = dp[s].filter((id) => id !== e.id);
+        if (w.manual) delete w.manual[e.id];
       }
     }
     if (editingId === e.id) editingId = null;
-  }
-
-  /** Casella del reparto: — → Mattino → Pomeriggio → —. */
-  function cycle(empId, d) {
-    const store = ui.store;
-    const dept = ui.dept;
-    const sched = ensureSchedule(store, ui.week);
-    const w = workingOn(sched, d)[empId];
-    let next = 'M';
-    if (w && w.dept === dept) next = w.shift === 'M' ? 'P' : null;
-    if (w) {
-      const c = cellOf(sched, d, w.dept);
-      c[w.shift] = c[w.shift].filter((id) => id !== empId);
-    }
-    if (next) cellOf(sched, d, dept)[next].push(empId);
   }
 
   function bindGlobal() {
@@ -687,28 +907,29 @@
       case 'week-today': return setWeek(new Date());
       case 'open-dept': ui.dept = el.dataset.dept; saveUI(); return render();
       case 'goto-staff': ui.tab = 'staff'; saveUI(); return render();
-      case 'cycle': cycle(el.dataset.id, Number(el.dataset.day)); save(); return render();
+      case 'period': ui.period = el.dataset.period; saveUI(); return render();
+      case 'period-prev': return shiftPeriod(-1);
+      case 'period-next': return shiftPeriod(1);
+      case 'summary-dept': ui.dept = el.dataset.dept; saveUI(); return render();
+      case 'pick': return openPicker(el);
       case 'generate': {
         const depts = ui.dept ? [ui.dept] : DEPTS.map((d) => d.id);
-        const run = () => {
-          const missing = generate(store, week, depts);
-          save();
-          render();
-          toast(missing ? `Turni generati: ${missing} ${missing === 1 ? 'posto scoperto' : 'posti scoperti'}` : 'Turni generati e bilanciati');
-        };
-        const sched = getSchedule(store, week);
-        const hasAny = sched && depts.some((dp) => sched.days.some((_, d) => assigned(sched, d, dp, 'M').length || assigned(sched, d, dp, 'P').length));
-        if (!hasAny) return run();
-        const what = ui.dept ? `di ${deptName(ui.dept)}` : 'di tutti i reparti';
-        return ask(`Rigenerare i turni ${what}? Le modifiche fatte a mano in questa settimana andranno perse.`, 'Rigenera')
-          .then((ok) => ok && run());
+        // Nessuna conferma: le caselle inserite a mano restano come sono.
+        const missing = generate(store, week, depts);
+        save();
+        render();
+        return toast(missing ? `Turni generati: ${missing} ${missing === 1 ? 'posto scoperto' : 'posti scoperti'}` : 'Turni generati e bilanciati');
       }
       case 'clear-week': {
         const what = ui.dept ? `di ${deptName(ui.dept)}` : 'di tutti i reparti';
-        return confirmed(`Eliminare i turni ${what} di questa settimana?`, 'Svuota', () => {
+        return confirmed(`Eliminare i turni generati ${what} di questa settimana? Le caselle inserite a mano restano.`, 'Svuota', () => {
           const sched = getSchedule(store, week);
-          if (!ui.dept) { delete state.schedules[store][week]; return; }
-          for (const day of sched.days) delete day[ui.dept];
+          sched.days.forEach((day, d) => {
+            for (const dp of Object.keys(day)) {
+              if (ui.dept && dp !== ui.dept) continue;
+              for (const s of ['M', 'P']) day[dp][s] = day[dp][s].filter((id) => manualOf(sched, id, d) === s);
+            }
+          });
         });
       }
       case 'copy-week': {

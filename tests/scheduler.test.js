@@ -107,3 +107,35 @@ test('evita pomeriggio seguito da mattino quando possibile', () => {
   }
   assert.ok(turnarounds <= 2, `troppe sequenze pomeriggio→mattino: ${turnarounds}`);
 });
+
+test('non modifica le caselle inserite a mano e le conta nella copertura', () => {
+  const employees = staff('casse', 6);
+  const fixed = {
+    'casse-0': { 0: 'P', 1: 'P', 2: 'P' },
+    'casse-1': { 0: 'F', 1: 'F', 2: 'F', 3: 'F', 4: 'F', 5: 'F', 6: 'F' },
+    'casse-2': { 3: 'A', 4: 'R' },
+  };
+  for (let seed = 1; seed <= 20; seed++) {
+    const { schedule, shortages } = generate({ employees, requirements: { casse: week(2, 2) }, fixed, seed });
+    for (let d = 0; d < 3; d++) {
+      assert.ok(schedule[d].casse.P.includes('casse-0'), 'turno manuale spostato');
+      assert.equal(schedule[d].casse.P.length, 2, 'il turno manuale deve contare nel fabbisogno');
+    }
+    for (let d = 0; d < 7; d++) {
+      for (const s of ['M', 'P']) assert.ok(!schedule[d].casse[s].includes('casse-1'), 'assegnato durante le ferie');
+    }
+    for (const s of ['M', 'P']) {
+      assert.ok(!schedule[3].casse[s].includes('casse-2'), 'assegnato durante un\'assenza');
+      assert.ok(!schedule[4].casse[s].includes('casse-2'), 'assegnato durante un riposo');
+    }
+    assert.ok(Array.isArray(shortages));
+  }
+});
+
+test('ferie e assenze riducono i turni massimi della settimana', () => {
+  const employees = staff('ortofrutta', 3);
+  const fixed = { 'ortofrutta-0': { 0: 'F', 1: 'F' } };
+  const { schedule } = generate({ employees, requirements: { ortofrutta: week(1, 1) }, fixed });
+  const c = countShifts(schedule)['ortofrutta-0'] || { M: 0, P: 0 };
+  assert.ok(c.M + c.P <= 3, `con 2 giorni di ferie al massimo 3 turni, trovati ${c.M + c.P}`);
+});

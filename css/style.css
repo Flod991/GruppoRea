@@ -379,3 +379,86 @@ th.name { font-weight: 600; }
   th.sticky { position: static; }
   .cell { border: 0; min-height: 0; }
 }
+
+/* ---------- Ferie, assenze e caselle manuali ---------- */
+:root {
+  --leave: #dff5ef;
+  --leave-ink: #11664f;
+  --leave-line: #7fcfb6;
+  --absent: #f1e7fb;
+  --absent-ink: #6a2fa0;
+  --absent-line: #c3a2e6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --leave: #12372e; --leave-ink: #8fe3c7; --leave-line: #2e7a63;
+    --absent: #2f2140; --absent-ink: #d9b8ff; --absent-line: #6b4a92;
+  }
+}
+:root[data-theme="dark"] {
+  --leave: #12372e; --leave-ink: #8fe3c7; --leave-line: #2e7a63;
+  --absent: #2f2140; --absent-ink: #d9b8ff; --absent-line: #6b4a92;
+}
+
+.cell { position: relative; }
+.cell.F { background: var(--leave); border-color: var(--leave-line); color: var(--leave-ink); }
+.cell.A { background: var(--absent); border-color: var(--absent-line); color: var(--absent-ink); }
+.cell.rest { color: var(--text); font-weight: 600; }
+.cell.manual::after {
+  content: "";
+  position: absolute; top: 4px; right: 4px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor;
+}
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); flex: none; position: relative; }
+.sw.M { background: var(--morning); border-color: var(--morning-line); }
+.sw.P { background: var(--afternoon); border-color: var(--afternoon-line); }
+.sw.F { background: var(--leave); border-color: var(--leave-line); }
+.sw.A { background: var(--absent); border-color: var(--absent-line); }
+.sw.R { background: var(--surface-2); }
+.sw.auto { border-style: dashed; }
+.sw.manual::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--muted); }
+
+.picker-menu {
+  position: fixed; z-index: 40;
+  display: flex; flex-direction: column;
+  min-width: 210px; padding: 6px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
+}
+.picker-title { font-size: 12px; color: var(--muted); padding: 4px 8px 6px; font-weight: 600; }
+.picker-menu .opt {
+  display: flex; align-items: center; gap: 10px;
+  border: 0; background: none; cursor: pointer;
+  padding: 8px; border-radius: 6px; text-align: left; font-weight: 600; font-size: 14px;
+}
+.picker-menu .opt small { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 11px; }
+.picker-menu .opt:hover, .picker-menu .opt:focus-visible { background: var(--surface-2); outline: none; }
+.picker-menu .opt.current { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.picker-menu .opt.auto { border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; margin-top: 4px; padding-top: 10px; }
+
+.ov-away { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.35; }
+
+/* ---------- Riepilogo ---------- */
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.segmented button { border: 0; background: none; padding: 8px 14px; font-weight: 600; cursor: pointer; color: var(--muted); }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.on { background: var(--text); color: var(--surface); }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.kpi span { font-size: 12px; color: var(--muted); font-weight: 600; }
+.kpi strong { font-size: 24px; font-variant-numeric: tabular-nums; }
+.kpi strong.bad { color: var(--danger); }
+.kpi small { font-size: 12px; color: var(--muted); }
+
+.summary { display: flex; flex-direction: column; gap: 16px; }
+.table-wrap.flat { border: 0; border-radius: 0; }
+.group-row th { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.bad-text { color: var(--danger); font-weight: 700; }
+.meter { display: inline-block; vertical-align: middle; width: 90px; height: 8px; border-radius: 4px; background: var(--danger-bg); overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--ok); }

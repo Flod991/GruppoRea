@@ -8,23 +8,29 @@ e l'app genera i turni in modo che ogni dipendente abbia mattine e pomeriggi bil
 
 ## Come si usa
 
-In alto si scelgono **punto vendita** e **reparto**. Le schede sono tre.
+In alto si scelgono **punto vendita** e **reparto**. Le schede sono quattro.
 
 - **Turni**: la settimana del reparto scelto. La prima riga contiene le persone richieste per ogni giorno (M = mattino, P = pomeriggio):
-  basta cambiare il numero. *Genera turni* compila la settimana; poi ogni casella si cambia con un tocco
-  (— → Mattino → Pomeriggio → —). L'ultima riga mostra la copertura, l'ultima colonna l'equilibrio mattine/pomeriggi
-  di ciascuno su tutte le settimane salvate. Scegliendo *Tutti i reparti* si vede la panoramica del punto vendita.
-- **Personale**: aggiunta e modifica dei dipendenti, con i turni massimi a settimana e i giorni in cui non sono disponibili
+  basta cambiare il numero. *Genera turni* compila la settimana. Toccando una casella si sceglie
+  **Mattino, Pomeriggio, Riposo, Ferie o Assente**: la casella viene segnata con un pallino ed è considerata *inserita a mano*.
+  Generando o rigenerando, le caselle inserite a mano **non vengono mai cambiate**: i turni contano per la copertura,
+  e riposo, ferie e assenze tengono libero il dipendente. *Automatico* restituisce la casella al generatore.
+  L'ultima riga mostra la copertura. Scegliendo *Tutti i reparti* si vede la panoramica del punto vendita, con chi è in ferie o assente.
+- **Riepilogo**: per settimana, mese, anno o tutto lo storico mostra copertura, posti scoperti, copertura per reparto e,
+  per ogni dipendente, mattine, pomeriggi, totale, giorni di ferie e di assenza ed equilibrio tra mattine e pomeriggi.
+- **Personale**: aggiunta e modifica dei dipendenti, con i turni massimi a settimana e i giorni fissi in cui non sono disponibili
   (riposo, solo mattino, solo pomeriggio).
 - **Impostazioni**: orari dei turni, regole di generazione, copia delle persone richieste su altre sedi, backup.
 
-Nel menu *Altro* dei turni ci sono Copia per Excel, Scarica CSV, Stampa e Svuota settimana.
+Nel menu *Altro* dei turni ci sono Copia per Excel, Scarica CSV, Stampa e Svuota settimana
+(che toglie solo i turni generati e lascia quelli inseriti a mano).
 
 ## Come vengono generati i turni
 
 Per ogni reparto il generatore:
 
 - assegna al massimo **un turno al giorno** per persona e rispetta indisponibilità e turni massimi settimanali;
+- lascia invariate le caselle inserite a mano; ogni giorno di ferie o di assenza riduce di uno i turni massimi della settimana;
 - distribuisce il **carico in modo equo** tra i colleghi dello stesso reparto;
 - **bilancia mattine e pomeriggi** di ciascuno: chi nelle settimane precedenti ha fatto più mattine riceve più pomeriggi,
   e viceversa (si può disattivare nelle Impostazioni);

@@ -22,6 +22,12 @@ In alto si scelgono **punto vendita** e **reparto**. Le schede sono quattro.
   (riposo, solo mattino, solo pomeriggio).
 - **Impostazioni**: orari dei turni, regole di generazione, copia delle persone richieste su altre sedi, backup.
 
+**Invia PDF** crea il PDF dei turni della settimana (del reparto scelto o di tutti i reparti) da mandare ai dipendenti:
+sul telefono apre la condivisione (WhatsApp, email…), sul computer lo scarica.
+
+Sul telefono la settimana si vede senza scorrere di lato: ogni dipendente ha una riga di 7 caselle
+(M mattino, P pomeriggio, R riposo, F ferie, A assente) e la panoramica di tutti i reparti si sfoglia giorno per giorno.
+
 Nel menu *Altro* dei turni ci sono Copia per Excel, Scarica CSV, Stampa e Svuota settimana
 (che toglie solo i turni generati e lascia quelli inseriti a mano).
 
@@ -72,7 +78,8 @@ index.html              pagina dell'app
 js/scheduler.js         motore di generazione dei turni (senza dipendenze, testato in Node)
 js/storage.js           salvataggio nel browser o su Supabase
 js/config.js            configurazione del database
-js/vendor/              libreria Supabase (supabase-js 2.116.0, licenza MIT)
+js/pdf.js               creazione del PDF dei turni
+js/vendor/              librerie esterne con licenza MIT: supabase-js 2.116.0, jsPDF 4.2.1, jsPDF-AutoTable 5.0.8
 js/app.js               interfaccia
 css/style.css           stili (tema chiaro/scuro e stampa)
 supabase/schema.sql     tabella e regole di accesso del database

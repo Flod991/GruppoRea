@@ -363,6 +363,12 @@
   // Rendering
   // ======================================================================
   const view = document.getElementById('view');
+  // Sul telefono la settimana si mostra a schede, senza scorrimento orizzontale.
+  const mobileQuery = window.matchMedia('(max-width: 760px)');
+  const isMobile = () => mobileQuery.matches;
+  const onMobileChange = () => { if (state) render(); };
+  if (mobileQuery.addEventListener) mobileQuery.addEventListener('change', onMobileChange);
+  else mobileQuery.addListener(onMobileChange);
 
   function render() {
     document.getElementById('tabs').hidden = false;
@@ -376,6 +382,10 @@
     closePicker();
     const renderers = { plan: renderPlan, summary: renderSummary, staff: renderStaff, settings: renderSettings };
     view.innerHTML = renderers[ui.tab]();
+    // Carica in anticipo le librerie del PDF, così la condivisione parte subito dopo il tocco.
+    if (ui.tab === 'plan' && !EMBED && getSchedule(ui.store, ui.week) && window.TurniPDF) {
+      setTimeout(() => TurniPDF.ensure().catch(() => {}), 800);
+    }
   }
 
   function sampleBanner() {
@@ -421,13 +431,16 @@
           </div>
           <span class="grow"></span>
           ${status}
-          <button class="btn primary no-print" data-action="generate" ${hasStaff ? '' : 'disabled'}>
-            ${sched ? 'Rigenera' : 'Genera'} turni${dept ? '' : ' di tutti i reparti'}</button>
+          <button class="btn ${sched ? '' : 'primary'} no-print" data-action="generate" ${hasStaff ? '' : 'disabled'}>
+            ${sched ? 'Rigenera' : 'Genera'} turni${dept || isMobile() ? '' : ' di tutti i reparti'}</button>
+          ${sched && !EMBED ? `<button class="btn primary no-print" data-action="pdf">${canSharePdf() ? 'Invia PDF' : 'Scarica PDF'}</button>` : ''}
           ${extra}
         </div>
         <h1>${esc(title)} <span class="sub">· ${esc(storeName(store))} · settimana dal ${fmtLong(dates[0])}</span></h1>
       </section>
-      ${dept ? renderDeptWeek(dept, sched, dates) : renderOverview(sched, dates)}`;
+      ${dept
+    ? (isMobile() ? renderDeptWeekMobile(dept, sched, dates) : renderDeptWeek(dept, sched, dates))
+    : (isMobile() ? renderOverviewMobile(sched, dates) : renderOverview(sched, dates))}`;
   }
 
   function renderDeptWeek(dept, sched, dates) {
@@ -493,6 +506,99 @@
         <span><i class="sw A"></i>Assente</span>
         <span><i class="sw manual"></i>Inserito a mano: la generazione non lo cambia</span>
       </div>`;
+  }
+
+  /** Stato di una casella: kind M/P/F/A/R/'' e testo breve e lungo. */
+  function cellState(e, d, sched, working, dept) {
+    const w = working[d][e.id];
+    const man = manualOf(sched, e.id, d);
+    if (w) {
+      const other = dept && w.dept !== dept;
+      return { kind: w.shift, short: w.shift, long: other ? `${SHIFT_NAMES[w.shift]} in ${deptName(w.dept)}` : SHIFT_NAMES[w.shift], man, other,
+        conflict: !Scheduler.canWork(e, d, w.shift) };
+    }
+    if (OFF_NAMES[man]) return { kind: man, short: man, long: OFF_NAMES[man], man };
+    if ((e.availability || [])[d] === 'X') return { kind: 'R', short: 'R', long: 'Riposo', man };
+    return { kind: '', short: '—', long: 'Nessun turno', man };
+  }
+
+  function renderDeptWeekMobile(dept, sched, dates) {
+    const store = ui.store;
+    const emps = deptEmployees(store, dept);
+    if (!emps.length) {
+      return `<div class="empty"><p>Nessun dipendente in ${esc(deptName(dept))} a ${esc(storeName(store))}.</p>
+        <button class="btn primary" data-action="goto-staff">Aggiungi personale</button></div>`;
+    }
+    const working = dates.map((_, d) => workingOn(sched, d));
+    const today = toISO(new Date());
+    const days = `<div class="wk-days" aria-hidden="true">${dates.map((dt, i) =>
+      `<div class="${toISO(dt) === today ? 'today' : ''}"><b>${DAY_SHORT[i]}</b>${dt.getDate()}</div>`).join('')}</div>`;
+
+    const needCard = `<div class="wk-card wk-need">
+      <div class="wk-name">Persone richieste</div>
+      <div class="wk-grid">${dates.map((_, d) => `<div class="wk-need-col">${['M', 'P'].map((s) => `
+        <label class="need ${s}"><span>${s}</span><input type="number" inputmode="numeric" min="0" max="50"
+          value="${need(store, dept, d, s)}" data-action="need" data-day="${d}" data-shift="${s}"
+          aria-label="${SHIFT_NAMES[s]} di ${DAY_NAMES[d]}: persone richieste"></label>`).join('')}</div>`).join('')}</div></div>`;
+
+    const cards = emps.map((e) => {
+      let m = 0, p = 0;
+      const cells = dates.map((_, d) => {
+        const c = cellState(e, d, sched, working, dept);
+        if (c.kind === 'M') m++;
+        if (c.kind === 'P') p++;
+        const cls = ['cell', 'mini', c.kind || 'off', c.kind === 'R' ? 'rest' : '', c.man ? 'manual' : '', c.other ? 'elsewhere' : '', c.conflict ? 'conflict' : ''].join(' ');
+        return `<button class="${cls}" data-action="pick" data-id="${e.id}" data-day="${d}" aria-haspopup="menu"
+          aria-label="${esc(e.name)}, ${DAY_NAMES[d]}: ${esc(c.long)}${c.man ? ', inserito a mano' : ''}. Premi per cambiare">${c.short}</button>`;
+      }).join('');
+      return `<div class="wk-card"><div class="wk-name">${esc(e.name)}<span class="muted small">${m} M · ${p} P</span></div>
+        <div class="wk-grid">${cells}</div></div>`;
+    }).join('');
+
+    const cover = `<div class="wk-card wk-cover"><div class="wk-name">Copertura</div>
+      <div class="wk-grid">${dates.map((_, d) => `<div>${['M', 'P'].map((s) => {
+        const n = need(store, dept, d, s);
+        if (!n) return '';
+        const have = assigned(sched, d, dept, s).length;
+        return `<span class="cov ${have >= n ? 'ok' : 'bad'}">${s} ${have}/${n}</span>`;
+      }).join('') || '<span class="muted small">—</span>'}</div>`).join('')}</div></div>`;
+
+    return `<div class="wk">${days}${needCard}${cards}${cover}</div>
+      <div class="legend">
+        <span><i class="sw M"></i>M Mattino ${esc(timeRange('M'))}</span>
+        <span><i class="sw P"></i>P Pomeriggio ${esc(timeRange('P'))}</span>
+        <span><i class="sw R"></i>R Riposo</span>
+        <span><i class="sw F"></i>F Ferie</span>
+        <span><i class="sw A"></i>A Assente</span>
+        <span><i class="sw manual"></i>Inserito a mano</span>
+      </div>`;
+  }
+
+  function renderOverviewMobile(sched, dates) {
+    const store = ui.store;
+    const todayIdx = dates.findIndex((dt) => toISO(dt) === toISO(new Date()));
+    const day = Number.isInteger(ui.day) && ui.day >= 0 && ui.day < 7 ? ui.day : Math.max(0, todayIdx);
+    const chips = `<div class="day-chips" role="group" aria-label="Giorno">${dates.map((dt, i) => {
+      const miss = DEPTS.reduce((a, dp) => a + ['M', 'P'].reduce((b, s) => b + Math.max(0, need(store, dp.id, i, s) - assigned(sched, i, dp.id, s).length), 0), 0);
+      return `<button class="${i === day ? 'on' : ''}" aria-pressed="${i === day}" data-action="day" data-day="${i}">
+        <b>${DAY_SHORT[i]}</b>${dt.getDate()}${sched && miss ? '<i class="dot" aria-label="posti scoperti"></i>' : ''}</button>`;
+    }).join('')}</div>`;
+    const cards = DEPTS.map((dept) => {
+      const parts = ['M', 'P'].map((s) => {
+        const n = need(store, dept.id, day, s);
+        const ids = assigned(sched, day, dept.id, s);
+        if (!n && !ids.length) return '';
+        const names = ids.map((id) => (empById(id) || {}).name).filter(Boolean).map(esc).join(', ');
+        return `<div class="ov ${s} ${ids.length < n ? 'bad' : ''}"><b>${SHIFT_NAMES[s]} ${ids.length}/${n}</b><span>${names || '—'}</span></div>`;
+      }).join('');
+      const away = deptEmployees(store, dept.id).filter((e) => ['F', 'A'].includes(manualOf(sched, e.id, day)))
+        .map((e) => `${esc(e.name)} (${manualOf(sched, e.id, day) === 'F' ? 'ferie' : 'assente'})`);
+      return `<div class="wk-card">
+        <div class="wk-name"><button class="link strong" data-action="open-dept" data-dept="${dept.id}">${esc(dept.name)} ›</button></div>
+        ${parts || '<span class="muted small">Chiuso</span>'}
+        ${away.length ? `<div class="ov-away">${away.join(', ')}</div>` : ''}</div>`;
+    }).join('');
+    return `${chips}<h2 class="day-title">${DAY_NAMES[day]} ${fmtLong(dates[day])}</h2><div class="wk">${cards}</div>`;
   }
 
   /** Menu di scelta per una casella. */
@@ -673,7 +779,16 @@
       <div class="kpi"><span>Ferie · Assenze</span><strong>${sum('F')} · ${sum('A')}</strong><small>giorni</small></div>
     </div>`;
 
-    const coverTable = dept ? '' : `<section class="panel">
+    const mobile = isMobile();
+    const coverTable = dept ? '' : mobile ? `<section class="panel">
+      <h2>Copertura per reparto</h2>
+      <ul class="plain-list">${depts.map((d) => {
+        const c = cover[d.id] || { need: 0, have: 0 };
+        const pct = c.need ? Math.round((c.have / c.need) * 100) : 0;
+        return `<li><button class="link strong" data-action="summary-dept" data-dept="${d.id}">${esc(d.name)}</button>
+          <span class="row"><span class="meter"><span style="width:${pct}%"></span></span><span class="small">${pct}%</span>
+          ${c.need - c.have ? `<span class="bad-text small">${c.need - c.have} scoperti</span>` : ''}</span></li>`;
+      }).join('')}</ul></section>` : `<section class="panel">
       <h2>Copertura per reparto</h2>
       <div class="table-wrap flat"><table><thead><tr><th>Reparto</th><th class="num">Posti richiesti</th><th class="num">Coperti</th><th class="num">Scoperti</th><th>Copertura</th></tr></thead>
       <tbody>${depts.map((d) => {
@@ -683,6 +798,18 @@
           <td class="num">${c.need}</td><td class="num">${c.have}</td><td class="num ${c.need - c.have ? 'bad-text' : ''}">${c.need - c.have}</td>
           <td><div class="meter"><span style="width:${pct}%"></span></div> <span class="small">${pct}%</span></td></tr>`;
       }).join('')}</tbody></table></div></section>`;
+
+    const empCards = depts.map((d) => {
+      const list = deptEmployees(store, d.id);
+      if (!list.length) return '';
+      return (dept ? '' : `<li class="group">${esc(d.name)}</li>`) + list.map((e) => {
+        const x = emp[e.id] || zero;
+        const extra = [x.F ? `${x.F} ferie` : '', x.A ? `${x.A} ${x.A === 1 ? 'assenza' : 'assenze'}` : ''].filter(Boolean).join(' · ');
+        return `<li><div><strong>${esc(e.name)}</strong>
+          <div class="muted small">${x.M} mattine · ${x.P} pomeriggi · ${x.M + x.P} turni${extra ? ` · ${extra}` : ''}</div></div>
+          ${balanceCell(x.M, x.P)}</li>`;
+      }).join('');
+    }).join('');
 
     const empRows = depts.map((d) => {
       const list = deptEmployees(store, d.id);
@@ -704,10 +831,10 @@
         ${coverTable}
         <section class="panel">
           <h2>Turni per dipendente</h2>
-          <div class="table-wrap flat"><table>
+          ${mobile ? `<ul class="plain-list emp-cards">${empCards || '<li class="muted">Nessun dipendente.</li>'}</ul>` : `<div class="table-wrap flat"><table>
             <thead><tr><th>Dipendente</th><th class="num">Mattine</th><th class="num">Pomeriggi</th><th class="num">Totale</th>
               <th class="num">Ferie</th><th class="num">Assenze</th><th>Equilibrio mattine/pomeriggi</th></tr></thead>
-            <tbody>${empRows || '<tr><td colspan="7" class="muted">Nessun dipendente.</td></tr>'}</tbody></table></div>
+            <tbody>${empRows || '<tr><td colspan="7" class="muted">Nessun dipendente.</td></tr>'}</tbody></table></div>`}
           <p class="hint">Ferie e assenze sono in giorni. L'equilibrio è pari quando mattine e pomeriggi si equivalgono.</p>
         </section>
       </div>` : '<div class="empty"><p>Nessun turno pianificato in questo periodo.</p></div>'}`;
@@ -843,10 +970,108 @@
   }
 
   // ======================================================================
+  // PDF da inviare ai dipendenti
+  // ======================================================================
+  const canSharePdf = () => {
+    try {
+      return !!(navigator.canShare && typeof File === 'function' &&
+        navigator.canShare({ files: [new File([''], 'turni.pdf', { type: 'application/pdf' })] }));
+    } catch (e) {
+      return false;
+    }
+  };
+  const plain = (t) => String(t).replace(/–/g, '-').replace(/…/g, '...');
+  const fileSafe = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+  function pdfData() {
+    const store = ui.store;
+    const sched = getSchedule(store, ui.week);
+    const dates = weekDates(ui.week);
+    const working = dates.map((_, d) => workingOn(sched, d));
+    const times = { M: plain(timeRange('M')), P: plain(timeRange('P')) };
+    const depts = DEPTS.filter((d) => (!ui.dept || d.id === ui.dept) && deptEmployees(store, d.id).length);
+    const sections = depts.map((dept) => ({
+      title: dept.name,
+      rows: deptEmployees(store, dept.id).map((e) => {
+        let total = 0;
+        const cells = dates.map((_, d) => {
+          const c = cellState(e, d, sched, working, null);
+          if (c.kind === 'M' || c.kind === 'P') {
+            total++;
+            const where = working[d][e.id].dept !== e.dept ? ` (${deptName(working[d][e.id].dept)})` : '';
+            return { kind: c.kind, text: `${SHIFT_NAMES[c.kind]}\n${times[c.kind]}${where}` };
+          }
+          if (c.kind === 'F' || c.kind === 'A') return { kind: c.kind, text: OFF_NAMES[c.kind] };
+          return { kind: 'R', text: 'Riposo' };
+        });
+        return { name: e.name, cells, total: String(total) };
+      }),
+    }));
+    return {
+      title: `Turni ${ui.dept ? deptName(ui.dept) : 'di tutti i reparti'} - ${storeName(store)}`,
+      subtitle: `Settimana da lunedì ${fmtLong(dates[0])} a domenica ${fmtLong(dates[6])}`,
+      days: dates.map((dt, i) => `${DAY_SHORT[i]} ${fmtShort(dt)}`),
+      sections,
+      legend: `Mattino ${times.M}  ·  Pomeriggio ${times.P}`,
+      footer: `Generato il ${fmtLong(new Date())}`,
+      fileName: `Turni_${fileSafe(storeName(store))}_${ui.dept ? fileSafe(deptName(ui.dept)) + '_' : ''}${ui.week}.pdf`,
+    };
+  }
+
+  /** Offre il file con un nuovo tocco quando il browser non consente la condivisione immediata. */
+  function offerFile(file) {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-backdrop';
+    wrap.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="pdf-ready">
+        <p id="pdf-ready"><strong>PDF pronto.</strong><br><span class="muted small">${esc(file.name)}</span></p>
+        <div class="row end">
+          <button class="btn" data-answer="download">Scarica</button>
+          <button class="btn primary" data-answer="share">Invia</button>
+        </div></div>`;
+    document.body.appendChild(wrap);
+    wrap.addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-answer]');
+      if (!b && ev.target !== wrap) return;
+      wrap.remove();
+      if (!b) return;
+      if (b.dataset.answer === 'share') navigator.share({ files: [file], title: file.name }).catch(() => {});
+      else download(file.name, file, 'application/pdf');
+    });
+    wrap.querySelector('[data-answer="share"]').focus();
+  }
+
+  async function exportPDF(btn) {
+    const data = pdfData();
+    if (!data.sections.length) return toast('Nessun dipendente da inserire nel PDF');
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Preparo il PDF…';
+    let blob;
+    try {
+      blob = await TurniPDF.build(data);
+    } catch (e) {
+      toast('Impossibile creare il PDF: controlla la connessione e riprova');
+      return;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+    const file = new File([blob], data.fileName, { type: 'application/pdf' });
+    if (!canSharePdf()) return download(data.fileName, blob, 'application/pdf');
+    try {
+      await navigator.share({ files: [file], title: data.title });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // l'utente ha chiuso la condivisione
+      offerFile(file);
+    }
+  }
+
+  // ======================================================================
   // Eventi
   // ======================================================================
   function setWeek(date) {
     ui.week = toISO(mondayOf(date));
+    ui.day = null;
     saveUI();
     render();
   }
@@ -908,6 +1133,8 @@
       case 'open-dept': ui.dept = el.dataset.dept; saveUI(); return render();
       case 'goto-staff': ui.tab = 'staff'; saveUI(); return render();
       case 'period': ui.period = el.dataset.period; saveUI(); return render();
+      case 'day': ui.day = Number(el.dataset.day); saveUI(); return render();
+      case 'pdf': return exportPDF(el);
       case 'period-prev': return shiftPeriod(-1);
       case 'period-next': return shiftPeriod(1);
       case 'summary-dept': ui.dept = el.dataset.dept; saveUI(); return render();

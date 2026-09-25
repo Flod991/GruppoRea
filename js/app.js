@@ -31,6 +31,8 @@
     { v: 'X', label: 'Riposo', short: 'Riposo' },
   ];
   const STORAGE_KEY = 'gruppoRea.turni.v1';
+  // Nella versione pubblicata su claude.ai stampa e download non sono disponibili.
+  const EMBED = !!window.TURNI_EMBED;
 
   const storeName = (id) => (STORES.find((s) => s.id === id) || {}).name || id;
   const deptName = (id) => (DEPTS.find((d) => d.id === id) || {}).name || id;
@@ -317,8 +319,9 @@
           <label class="check"><input type="checkbox" data-action="use-history" ${state.settings.useHistory ? 'checked' : ''}>
             Compensa lo storico delle settimane precedenti</label>
           <span class="spacer"></span>
-          <button class="btn" data-action="export-csv" ${sched ? '' : 'disabled'}>Esporta CSV</button>
-          <button class="btn" data-action="print" ${sched ? '' : 'disabled'}>Stampa</button>
+          <button class="btn" data-action="copy-week" ${sched ? '' : 'disabled'}>Copia per Excel</button>
+          ${EMBED ? '' : `<button class="btn" data-action="export-csv" ${sched ? '' : 'disabled'}>Esporta CSV</button>
+          <button class="btn" data-action="print" ${sched ? '' : 'disabled'}>Stampa</button>`}
           <button class="btn danger" data-action="clear-week" ${sched ? '' : 'disabled'}>Svuota settimana</button>
         </div>
       </div>
@@ -562,9 +565,10 @@
       </div>
       <div class="card form-grid">
         <h2>Backup dei dati</h2>
-        <p class="hint">I dati sono salvati solo in questo browser. Esporta un backup regolarmente o per spostarli su un altro computer.</p>
+        <p class="hint">I dati sono salvati solo in questo browser. Esporta un backup regolarmente o per spostarli su un altro computer.${EMBED ? ' Il backup copiato si incolla in un file di testo con estensione .json, che puoi poi importare.' : ''}</p>
         <div class="toolbar">
-          <button class="btn" data-action="backup">Esporta backup</button>
+          ${EMBED ? '<button class="btn" data-action="copy-backup">Copia backup negli appunti</button>'
+            : '<button class="btn" data-action="backup">Esporta backup</button>'}
           <label class="btn">Importa backup<input type="file" accept="application/json,.json" data-action="restore" hidden></label>
         </div>
       </div>
@@ -579,17 +583,16 @@
   }
 
   // ======================================================================
-  // Esportazione
+  // Esportazione e appunti
   // ======================================================================
-  function exportCSV() {
+  function weekTable() {
     const store = state.ui.store;
     const week = state.ui.week;
     const sched = getSchedule(store, week);
-    if (!sched) return;
+    if (!sched) return null;
     const dates = weekDates(week);
     const working = dates.map((_, d) => workingOn(sched, d));
-    const cell = (v) => `"${String(v).replace(/"/g, '""')}"`;
-    const lines = [['Reparto', 'Dipendente', ...dates.map((dt, i) => `${DAY_NAMES[i]} ${fmtShort(dt)}`), 'Mattine', 'Pomeriggi', 'Totale'].map(cell).join(';')];
+    const rows = [['Reparto', 'Dipendente', ...dates.map((dt, i) => `${DAY_NAMES[i]} ${fmtShort(dt)}`), 'Mattine', 'Pomeriggi', 'Totale']];
     for (const dept of DEPTS) {
       for (const e of storeEmployees(store).filter((x) => x.dept === dept.id)) {
         let m = 0, p = 0;
@@ -600,10 +603,69 @@
           const t = state.settings.times[w.shift];
           return `${SHIFT_NAMES[w.shift]} ${t.start}-${t.end}${w.dept !== e.dept ? ` (${deptName(w.dept)})` : ''}`;
         });
-        lines.push([dept.name, e.name, ...days, m, p, m + p].map(cell).join(';'));
+        rows.push([dept.name, e.name, ...days, m, p, m + p]);
       }
     }
-    download(`turni-${store}-${week}.csv`, '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    return rows;
+  }
+
+  function exportCSV() {
+    const rows = weekTable();
+    if (!rows) return;
+    const cell = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const csv = rows.map((r) => r.map(cell).join(';')).join('\r\n');
+    download(`turni-${state.ui.store}-${state.ui.week}.csv`, '﻿' + csv, 'text/csv;charset=utf-8');
+  }
+
+  function copyText(text, okMsg) {
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      toast(ok ? okMsg : 'Copia non riuscita: il browser non consente l\'accesso agli appunti');
+    };
+    try {
+      navigator.clipboard.writeText(text).then(() => toast(okMsg), fallback);
+    } catch (e) {
+      fallback();
+    }
+  }
+
+  // ======================================================================
+  // Conferme (riquadro interno alla pagina)
+  // ======================================================================
+  function ask(message, okLabel, danger) {
+    return new Promise((resolve) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-backdrop';
+      wrap.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-msg">
+          <p id="modal-msg">${esc(message)}</p>
+          <div class="toolbar modal-actions">
+            <button class="btn" data-answer="no">Annulla</button>
+            <button class="btn ${danger ? 'danger-solid' : 'primary'}" data-answer="yes">${esc(okLabel || 'Conferma')}</button>
+          </div></div>`;
+      const close = (v) => {
+        wrap.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(v);
+      };
+      const onKey = (ev) => { if (ev.key === 'Escape') close(false); };
+      wrap.addEventListener('click', (ev) => {
+        const b = ev.target.closest('[data-answer]');
+        if (b) close(b.dataset.answer === 'yes');
+        else if (ev.target === wrap) close(false);
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(wrap);
+      wrap.querySelector('[data-answer="yes"]').focus();
+    });
   }
 
   // ======================================================================
@@ -613,6 +675,16 @@
     state.ui.week = toISO(mondayOf(date));
     save();
     render();
+  }
+
+  function removeEmployee(e) {
+    state.employees = state.employees.filter((x) => x.id !== e.id);
+    for (const st of Object.keys(state.schedules)) {
+      for (const w of Object.values(state.schedules[st])) {
+        for (const day of w.days) for (const dp of Object.values(day)) for (const s of ['M', 'P']) dp[s] = dp[s].filter((id) => id !== e.id);
+      }
+    }
+    if (editingId === e.id) editingId = null;
   }
 
   document.querySelector('.tabs').addEventListener('click', (ev) => {
@@ -637,6 +709,13 @@
     const a = el.dataset.action;
     const store = state.ui.store;
     const week = state.ui.week;
+    // Esegue fn dopo la conferma dell'utente, poi salva e ridisegna.
+    const confirmed = (msg, okLabel, fn) => ask(msg, okLabel, true).then((ok) => {
+      if (!ok) return;
+      fn();
+      save();
+      render();
+    });
 
     switch (a) {
       case 'week-prev': return setWeek(addDays(fromISO(week), -7));
@@ -645,15 +724,18 @@
       case 'goto': state.ui.tab = el.dataset.tab; save(); return render();
       case 'view': state.ui.view = el.dataset.view; save(); return render();
       case 'generate': {
-        if (getSchedule(store, week) && !confirm('Rigenerare i turni? Le modifiche manuali di questa settimana andranno perse.')) return;
-        const res = generateWeek(store, week);
-        const missing = res.shortages.reduce((x, s) => x + s.missing, 0);
-        toast(missing ? `Turni generati: ${missing} posti scoperti` : 'Turni generati e bilanciati');
-        return render();
+        const run = () => {
+          const res = generateWeek(store, week);
+          const missing = res.shortages.reduce((x, s) => x + s.missing, 0);
+          toast(missing ? `Turni generati: ${missing} posti scoperti` : 'Turni generati e bilanciati');
+        };
+        if (!getSchedule(store, week)) { run(); return render(); }
+        return ask('Rigenerare i turni? Le modifiche manuali di questa settimana andranno perse.', 'Rigenera').then((ok) => {
+          if (ok) { run(); render(); }
+        });
       }
       case 'clear-week':
-        if (!confirm('Eliminare i turni di questa settimana?')) return;
-        setSchedule(store, week, null); save(); return render();
+        return confirmed('Eliminare i turni di questa settimana?', 'Elimina turni', () => setSchedule(store, week, null));
       case 'unassign': {
         const sched = getSchedule(store, week);
         const { day, dept, shift, id } = el.dataset;
@@ -662,25 +744,26 @@
         save(); return render();
       }
       case 'export-csv': return exportCSV();
+      case 'copy-week': {
+        const rows = weekTable();
+        if (rows) copyText(rows.map((r) => r.join('\t')).join('\n'), 'Turni copiati: incollali in Excel');
+        return;
+      }
       case 'print': return window.print();
       case 'edit-emp': editingId = el.dataset.id; render(); document.querySelector('#emp-form input[name=name]').focus(); return;
       case 'cancel-edit': editingId = null; return render();
       case 'delete-emp': {
         const e = empById(el.dataset.id);
-        if (!e || !confirm(`Eliminare ${e.name}? Verrà rimosso anche dai turni già pianificati.`)) return;
-        state.employees = state.employees.filter((x) => x.id !== e.id);
-        for (const st of Object.keys(state.schedules)) {
-          for (const w of Object.values(state.schedules[st])) {
-            for (const day of w.days) for (const dp of Object.values(day)) for (const s of ['M', 'P']) dp[s] = dp[s].filter((id) => id !== e.id);
-          }
-        }
-        if (editingId === e.id) editingId = null;
-        save(); toast('Dipendente eliminato'); return render();
+        if (!e) return;
+        return confirmed(`Eliminare ${e.name}? Verrà rimosso anche dai turni già pianificati.`, 'Elimina', () => {
+          removeEmployee(e);
+          toast('Dipendente eliminato');
+        });
       }
       case 'clear-sample':
-        if (!confirm('Eliminare tutti i dipendenti di esempio e i turni generati?')) return;
-        state.employees = []; state.schedules = {}; state.sampleData = false;
-        save(); return render();
+        return confirmed('Eliminare tutti i dipendenti di esempio e i turni generati?', 'Elimina dati di esempio', () => {
+          state.employees = []; state.schedules = {}; state.sampleData = false;
+        });
       case 'copy-monday': {
         const r = state.requirements[store][el.dataset.dept];
         for (let d = 1; d < 6; d++) r[d] = { M: r[0].M, P: r[0].P };
@@ -693,18 +776,22 @@
         save(); toast(`Fabbisogno copiato su ${targets.length === 1 ? storeName(targets[0]) : 'tutti gli altri punti vendita'}`); return;
       }
       case 'reset-needs':
-        if (!confirm('Ripristinare il fabbisogno predefinito per questo punto vendita?')) return;
-        state.requirements[store] = defaultRequirements()[store]; save(); return render();
+        return confirmed('Ripristinare il fabbisogno predefinito per questo punto vendita?', 'Ripristina', () => {
+          state.requirements[store] = defaultRequirements()[store];
+        });
       case 'backup':
         return download(`backup-turni-${toISO(new Date())}.json`, JSON.stringify(state, null, 2), 'application/json');
+      case 'copy-backup':
+        return copyText(JSON.stringify(state), 'Backup copiato negli appunti');
       case 'load-sample':
-        if (!confirm('Caricare i dati di esempio? Sostituiranno dipendenti e turni attuali.')) return;
-        state.employees = sampleEmployees(); state.schedules = {}; state.sampleData = true;
-        save(); toast('Dati di esempio caricati'); return render();
-      case 'reset-all': {
-        if (!confirm('Cancellare definitivamente tutti i dipendenti, i turni e le impostazioni?')) return;
-        state = freshState(false); save(); return render();
-      }
+        return confirmed('Caricare i dati di esempio? Sostituiranno dipendenti e turni attuali.', 'Carica esempio', () => {
+          state.employees = sampleEmployees(); state.schedules = {}; state.sampleData = true;
+          toast('Dati di esempio caricati');
+        });
+      case 'reset-all':
+        return confirmed('Cancellare definitivamente tutti i dipendenti, i turni e le impostazioni?', 'Cancella tutto', () => {
+          state = freshState(false);
+        });
     }
   });
 
@@ -720,14 +807,19 @@
         if (!el.value) return;
         const sched = getSchedule(store, state.ui.week);
         const { day, dept, shift } = el.dataset;
-        const e = empById(el.value);
-        if (e && !Scheduler.canWork(e, Number(day), shift) &&
-            !confirm(`${e.name} risulta non disponibile ${DAY_NAMES[day].toLowerCase()} per il turno di ${SHIFT_NAMES[shift].toLowerCase()}. Assegnare comunque?`)) {
-          return render();
+        const id = el.value;
+        const e = empById(id);
+        const add = () => {
+          sched.days[day][dept] = sched.days[day][dept] || { M: [], P: [] };
+          sched.days[day][dept][shift].push(id);
+          save();
+          render();
+        };
+        if (e && !Scheduler.canWork(e, Number(day), shift)) {
+          return ask(`${e.name} risulta non disponibile ${DAY_NAMES[day].toLowerCase()} per il turno di ${SHIFT_NAMES[shift].toLowerCase()}. Assegnare comunque?`, 'Assegna')
+            .then((ok) => (ok ? add() : render()));
         }
-        sched.days[day][dept] = sched.days[day][dept] || { M: [], P: [] };
-        sched.days[day][dept][shift].push(el.value);
-        save(); return render();
+        return add();
       }
       case 'need': {
         const v = Math.max(0, Math.min(50, parseInt(el.value, 10) || 0));
@@ -742,9 +834,11 @@
         file.text().then((txt) => {
           const data = JSON.parse(txt);
           if (!data || !Array.isArray(data.employees)) throw new Error('formato');
-          if (!confirm('Importare il backup? I dati attuali verranno sostituiti.')) return;
-          state = normalize(data); save(); toast('Backup importato'); render();
-        }).catch(() => toast('File di backup non valido'));
+          return ask('Importare il backup? I dati attuali verranno sostituiti.', 'Importa', true).then((ok) => {
+            if (!ok) return;
+            state = normalize(data); save(); toast('Backup importato'); render();
+          });
+        }).catch(() => toast('File di backup non valido: scegli un file .json esportato da questa app'));
       }
     }
   });

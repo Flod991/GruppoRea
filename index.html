@@ -12,30 +12,34 @@
   <header class="app-header">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">T</span>
-      <div>
-        <div class="brand-title">Turni Gruppo Rea</div>
-        <div class="brand-sub">Pianificazione turni per reparto</div>
-      </div>
+      <div class="brand-title">Turni Gruppo Rea</div>
+      <span id="sync-status" class="sync" aria-live="polite"></span>
     </div>
-    <label class="store-picker">
-      <span>Punto vendita</span>
-      <select id="store-select" aria-label="Punto vendita"></select>
-    </label>
+    <div class="pickers" id="pickers">
+      <label class="picker">
+        <span>Punto vendita</span>
+        <select id="store-select"></select>
+      </label>
+      <label class="picker">
+        <span>Reparto</span>
+        <select id="dept-select"></select>
+      </label>
+    </div>
   </header>
 
-  <nav class="tabs" role="tablist" aria-label="Sezioni">
-    <button role="tab" data-tab="plan">Turni</button>
-    <button role="tab" data-tab="summary">Riepilogo</button>
-    <button role="tab" data-tab="employees">Dipendenti</button>
-    <button role="tab" data-tab="needs">Fabbisogno</button>
-    <button role="tab" data-tab="settings">Impostazioni</button>
+  <nav class="tabs" id="tabs" aria-label="Sezioni">
+    <button data-tab="plan">Turni</button>
+    <button data-tab="staff">Personale</button>
+    <button data-tab="settings">Impostazioni</button>
   </nav>
 
   <main id="view" tabindex="-1"></main>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script src="js/config.js"></script>
   <script src="js/scheduler.js"></script>
+  <script src="js/storage.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

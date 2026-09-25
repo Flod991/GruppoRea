@@ -24,7 +24,9 @@ const page = [
   `<style>\n${read('css/style.css')}\n</style>`,
   body.trim(),
   script('window.TURNI_EMBED = true;'),
+  script(read('js/config.js')),
   script(read('js/scheduler.js')),
+  script(read('js/storage.js')),
   script(read('js/app.js')),
   '',
 ].join('\n');

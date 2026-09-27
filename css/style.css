@@ -597,3 +597,19 @@ body.auth .app-header { display: none; }
   .more .menu .menu-title { display: block; font-weight: 700; font-size: 15px; color: var(--muted); padding: 4px 2px 6px; }
   .more .menu .btn { width: 100%; justify-content: center; min-height: 50px; font-size: 16px; }
 }
+
+/* ---------- Uscita dall'account ---------- */
+.brand .logout { margin-left: 4px; }
+@media (max-width: 760px) {
+  .brand { width: 100%; }
+  .brand .logout { margin-left: auto; min-height: 40px; }
+}
+
+/* ---------- Orari dei turni ---------- */
+.time-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; }
+.time-row input { width: 100%; min-width: 0; }
+@media (max-width: 760px) {
+  .time-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .time-row .label { grid-column: 1 / -1; }
+  .time-row input { min-height: 46px; font-size: 16px; }
+}

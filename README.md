@@ -23,7 +23,8 @@ In alto si scelgono **punto vendita** e **reparto**. Le schede sono quattro.
   **PDF riepilogo** crea lo stesso riepilogo in PDF: del punto vendita (con *Tutti i reparti*) o del singolo reparto.
 - **Personale**: aggiunta e modifica dei dipendenti, con i turni massimi a settimana e i giorni fissi in cui non sono disponibili
   (riposo, solo mattino, solo pomeriggio).
-- **Impostazioni**: orari dei turni, regole di generazione, copia delle persone richieste su altre sedi, backup.
+- **Impostazioni**: orari dei turni e regole di generazione (turni a settimana predefiniti, compensazione delle settimane passate).
+  Con il database, il pulsante **Esci** in alto permette di cambiare utente.
 
 **Invia PDF** crea il PDF dei turni della settimana (del reparto scelto o di tutti i reparti) da mandare ai dipendenti:
 sul telefono apre la condivisione (WhatsApp, email…), sul computer lo scarica.

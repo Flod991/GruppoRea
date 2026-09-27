@@ -76,7 +76,6 @@
   const fmtShort = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
   const fmtLong = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
   const byName = (a, b) => a.name.localeCompare(b.name, 'it');
-  const clone = (o) => JSON.parse(JSON.stringify(o));
 
   function toast(msg) {
     const el = document.getElementById('toast');
@@ -395,6 +394,7 @@
 
   function render() {
     document.body.classList.remove('auth');
+    document.getElementById('logout-btn').hidden = storage.mode !== 'cloud';
     document.getElementById('tabs').hidden = false;
     document.getElementById('pickers').hidden = false;
     document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.tab === ui.tab)));
@@ -993,11 +993,10 @@
   // ---------------------------- Impostazioni ----------------------------
   function renderSettings() {
     const t = state.settings.times;
-    const cloud = storage.mode === 'cloud';
     return `<div class="settings">
       <section class="panel form">
         <h2>Orari dei turni</h2>
-        ${['M', 'P'].map((s) => `<div class="row"><span class="label">${SHIFT_NAMES[s]}</span>
+        ${['M', 'P'].map((s) => `<div class="time-row"><span class="label">${SHIFT_NAMES[s]}</span>
           <input id="t-${s}-start" type="time" data-action="time" data-shift="${s}" data-edge="start" value="${esc(t[s].start)}" aria-label="Inizio ${SHIFT_NAMES[s]}"> –
           <input id="t-${s}-end" type="time" data-action="time" data-shift="${s}" data-edge="end" value="${esc(t[s].end)}" aria-label="Fine ${SHIFT_NAMES[s]}"></div>`).join('')}
       </section>
@@ -1008,30 +1007,6 @@
         <div class="row"><button class="btn" data-action="apply-max">Applica ${esc(state.settings.defaultMaxShifts)} turni a tutto il personale</button></div>
         <label class="check"><input id="s-hist" type="checkbox" data-action="use-history" ${state.settings.useHistory ? 'checked' : ''}>
           Compensa le settimane passate: chi ha fatto più mattine riceve più pomeriggi</label>
-      </section>
-      <section class="panel form">
-        <h2>Persone richieste</h2>
-        <p class="hint">Copia le persone richieste di ${esc(storeName(ui.store))} su un altro punto vendita.</p>
-        <div class="row">
-          <select id="copy-target" aria-label="Punto vendita di destinazione">
-            <option value="__all">Tutti gli altri</option>
-            ${STORES.filter((s) => s.id !== ui.store).map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}
-          </select>
-          <button class="btn" data-action="copy-needs">Copia</button>
-          <button class="btn danger" data-action="reset-needs">Valori predefiniti</button>
-        </div>
-      </section>
-      <section class="panel form">
-        <h2>Dati</h2>
-        <p class="hint">${cloud
-          ? `Dati condivisi tra tutte le sedi. Accesso effettuato come <strong>${esc((storage.user || {}).email || '')}</strong>.`
-          : 'I dati sono salvati solo in questo browser. Per condividerli tra le sedi serve il database (vedi README).'}</p>
-        <div class="row">
-          ${EMBED ? '<button class="btn" data-action="copy-backup">Copia backup</button>' : '<button class="btn" data-action="backup">Scarica backup</button>'}
-          <label class="btn">Importa backup<input type="file" accept="application/json,.json" data-action="restore" hidden></label>
-          ${cloud ? '<button class="btn" data-action="logout">Esci</button>' : '<button class="btn" data-action="load-sample">Dati di esempio</button>'}
-          <button class="btn danger" data-action="reset-all">Cancella tutto</button>
-        </div>
       </section>
     </div>`;
   }
@@ -1220,6 +1195,12 @@
       render();
     });
 
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      ask(`Uscire dall'account ${(storage.user || {}).email || ''}?`, 'Esci').then((ok) => {
+        if (ok) storage.signOut().then(() => renderLogin());
+      });
+    });
+
     view.addEventListener('click', onClick);
     view.addEventListener('change', onChange);
     view.addEventListener('submit', onSubmit);
@@ -1298,13 +1279,6 @@
         return confirmed('Eliminare tutti i dipendenti di esempio e i loro turni?', 'Elimina', () => {
           state.employees = []; state.schedules = {}; state.sampleData = false;
         });
-      case 'copy-needs': {
-        const target = document.getElementById('copy-target').value;
-        const targets = target === '__all' ? STORES.filter((s) => s.id !== store).map((s) => s.id) : [target];
-        for (const t of targets) state.requirements[t] = clone(state.requirements[store]);
-        save();
-        return toast(`Copiato su ${targets.length === 1 ? storeName(targets[0]) : 'tutti gli altri punti vendita'}`);
-      }
       case 'apply-max': {
         const n = Number(state.settings.defaultMaxShifts) || DEFAULT_MAX_SHIFTS;
         const count = state.employees.filter((e) => Number(e.maxShifts) !== n).length;
@@ -1314,24 +1288,6 @@
           toast(`${count} ${count === 1 ? 'dipendente aggiornato' : 'dipendenti aggiornati'}`);
         });
       }
-      case 'reset-needs':
-        return confirmed(`Ripristinare le persone richieste predefinite per ${storeName(store)}?`, 'Ripristina', () => {
-          state.requirements[store] = defaultStoreRequirements();
-        });
-      case 'backup':
-        return download(`backup-turni-${toISO(new Date())}.json`, JSON.stringify(state, null, 2), 'application/json');
-      case 'copy-backup':
-        return copyText(JSON.stringify(state), 'Backup copiato negli appunti');
-      case 'load-sample':
-        return confirmed('Caricare i dati di esempio? Sostituiranno dipendenti e turni attuali.', 'Carica', () => {
-          state.employees = sampleEmployees(); state.schedules = {}; state.sampleData = true;
-        });
-      case 'reset-all':
-        return confirmed('Cancellare definitivamente tutti i dipendenti, i turni e le impostazioni di tutte le sedi?', 'Cancella tutto', () => {
-          state = freshState(false);
-        });
-      case 'logout':
-        return storage.signOut().then(() => renderLogin());
     }
   }
 
@@ -1350,21 +1306,6 @@
       }
       case 'time': state.settings.times[el.dataset.shift][el.dataset.edge] = el.value; return save();
       case 'default-max': state.settings.defaultMaxShifts = Math.max(1, Math.min(7, parseInt(el.value, 10) || DEFAULT_MAX_SHIFTS)); save(); return render();
-      case 'restore': {
-        const file = el.files && el.files[0];
-        if (!file) return;
-        file.text().then((txt) => {
-          const data = JSON.parse(txt);
-          if (!data || !Array.isArray(data.employees)) throw new Error('formato');
-          return ask('Importare il backup? I dati attuali verranno sostituiti.', 'Importa', true).then((ok) => {
-            if (!ok) return;
-            state = normalize(data);
-            save();
-            render();
-            toast('Backup importato');
-          });
-        }).catch(() => toast('File non valido: scegli un backup .json esportato da questa app'));
-      }
     }
   }
 

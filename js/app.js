@@ -1385,7 +1385,37 @@
     render();
   }
 
+  // ======================================================================
+  // Aggiornamenti
+  // ======================================================================
+  // L'app installata sul telefono si riapre senza ricaricare la pagina: all'avvio e ogni volta
+  // che torna in primo piano controlla version.json e, se è uscita una versione nuova, si ricarica.
+  const APP_VERSION = (() => {
+    const tag = document.querySelector('script[src*="js/app.js"]');
+    const m = tag && /[?&]v=([^&]+)/.exec(tag.src);
+    return m ? m[1] : '';
+  })();
+
+  async function checkForUpdate() {
+    if (!APP_VERSION || EMBED || location.protocol === 'file:') return;
+    try {
+      const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+      const { version } = await res.json();
+      if (!version || version === APP_VERSION) return;
+      // Una sola ricarica per versione, per non entrare in un ciclo se la rete serve ancora i file vecchi.
+      if (sessionStorage.getItem('turni.updatedTo') === version) return;
+      sessionStorage.setItem('turni.updatedTo', version);
+      if (storage) await storage.flush();
+      // Un indirizzo nuovo evita che il browser usi la pagina vecchia dalla memoria.
+      location.replace(`${location.pathname}?v=${encodeURIComponent(version)}${location.hash}`);
+    } catch (e) {
+      // Senza rete o con sessionStorage bloccato si continua con la versione in uso.
+    }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
+
   async function boot() {
+    checkForUpdate();
     storage = TurniStorage.create(STORES.map((s) => s.id), { onStatus: setSync });
     bindGlobal();
     if (storage.mode === 'local') {

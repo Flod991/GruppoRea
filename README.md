@@ -95,4 +95,7 @@ scripts/build-artifact.js  versione a file unico
 
 Verifica del sito e del database pubblicati: GitHub → Actions → *Verifica online* → *Run workflow*.
 
+Prima di ogni pubblicazione lanciare `node scripts/bump-version.js`: aggiorna il numero di versione, così i telefoni
+scaricano subito i file nuovi e l'app installata si aggiorna da sola quando viene riaperta.
+
 Test: `npm test` (serve Node 18 o superiore). Girano anche automaticamente su GitHub a ogni modifica.

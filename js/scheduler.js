@@ -69,7 +69,7 @@
    * @param {Object<string, {M:number,P:number}>} [opts.history]  turni già svolti in passato per dipendente
    * @param {Object<string, Object<number,string>>} [opts.fixed]  dipendente -> giorno -> 'M'|'P'|'G'|'R'|'F'|'A' inseriti a mano
    * @param {number} [opts.days=7]
-   * @param {number} [opts.defaultMaxShifts=5]
+   * @param {number} [opts.defaultMaxShifts=6]
    * @param {number} [opts.seed=1]  cambia il seed per ottenere soluzioni alternative equivalenti
    * @returns {{schedule: Array<Object<string,{M:string[],P:string[],G:string[]}>>, shortages: Array<{day:number,dept:string,shift:string,missing:number}>}}
    */
@@ -80,7 +80,7 @@
       history = {},
       fixed = {},
       days = 7,
-      defaultMaxShifts = 5,
+      defaultMaxShifts = 6,
       seed = 1,
     } = opts || {};
     const rand = mulberry32(seed);

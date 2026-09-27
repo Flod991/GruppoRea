@@ -16,6 +16,7 @@ In alto si scelgono **punto vendita** e **reparto**. Le schede sono quattro.
   Generando o rigenerando, le caselle inserite a mano **non vengono mai cambiate**: i turni contano per la copertura,
   e riposo, ferie e assenze tengono libero il dipendente. *Automatico* restituisce la casella al generatore.
   La giornata intera (dall'inizio del mattino alla fine del pomeriggio) copre entrambi i turni e vale un giorno di lavoro.
+  Dopo la generazione chi non ha turni in un giorno è a **Riposo**.
   L'ultima riga mostra la copertura. Scegliendo *Tutti i reparti* si vede la panoramica del punto vendita, con chi è in ferie o assente.
 - **Riepilogo**: per settimana, mese (scelto da un elenco: settembre, ottobre…), anno o tutto lo storico mostra copertura, posti scoperti, copertura per reparto e,
   per ogni dipendente, mattine, pomeriggi, giornate intere, giorni lavorati, ferie, assenze ed equilibrio tra mattine e pomeriggi.

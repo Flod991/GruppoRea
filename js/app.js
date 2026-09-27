@@ -51,6 +51,8 @@
   ];
   const MONTHS = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
   const UI_KEY = 'gruppoRea.turni.ui';
+  // Turni a settimana proposti per i nuovi dipendenti.
+  const DEFAULT_MAX_SHIFTS = 6;
   // Nella versione pubblicata su claude.ai stampa e download non sono disponibili.
   const EMBED = !!window.TURNI_EMBED;
   // Logo (la versione a file unico lo passa già incorporato).
@@ -180,7 +182,7 @@
             name: `${first[(k * 7 + si) % first.length]} ${last[(k * 5 + si * 3) % last.length]}`,
             store: store.id,
             dept: dept.id,
-            maxShifts: 5,
+            maxShifts: DEFAULT_MAX_SHIFTS,
             availability,
           });
         }
@@ -196,7 +198,8 @@
       version: 2,
       settings: {
         times: { M: { start: '07:00', end: '14:00' }, P: { start: '14:00', end: '21:00' } },
-        defaultMaxShifts: 5,
+        defaultMaxShifts: DEFAULT_MAX_SHIFTS,
+        maxShiftsDefault6: true,
         useHistory: true,
       },
       employees: withSample ? sampleEmployees() : [],
@@ -210,8 +213,12 @@
   function normalize(s) {
     const base = freshState(false);
     s = s || {};
+    const migratedMax = !!(s.settings && s.settings.maxShiftsDefault6);
     s.settings = Object.assign(base.settings, s.settings || {});
     s.settings.times = Object.assign(base.settings.times, s.settings.times || {});
+    // Il valore predefinito è passato da 5 a 6 turni: si aggiorna una sola volta chi aveva il vecchio.
+    if (!migratedMax && Number(s.settings.defaultMaxShifts) === 5) s.settings.defaultMaxShifts = DEFAULT_MAX_SHIFTS;
+    s.settings.maxShiftsDefault6 = true;
     s.employees = Array.isArray(s.employees) ? s.employees : [];
     s.requirements = s.requirements || {};
     for (const st of STORES) {
@@ -358,7 +365,7 @@
       requirements,
       fixed,
       history: state.settings.useHistory ? historyCounts(store, week) : {},
-      defaultMaxShifts: Number(state.settings.defaultMaxShifts) || 5,
+      defaultMaxShifts: Number(state.settings.defaultMaxShifts) || DEFAULT_MAX_SHIFTS,
       seed: Math.floor(Math.random() * 1e9),
     });
     const sched = ensureSchedule(store, week);
@@ -488,7 +495,9 @@
         const w = working[d][e.id];
         const man = manualOf(sched, e.id, d);
         let cls = 'off';
-        let label = (e.availability || [])[d] === 'X' ? 'Riposo' : '—';
+        // Settimana pianificata: chi non ha turni è a riposo. Il trattino resta solo prima della generazione.
+        let label = sched || (e.availability || [])[d] === 'X' ? 'Riposo' : '—';
+        if (label === 'Riposo') cls = 'off rest';
         if (w) {
           if (w.shift === 'M') m++; else if (w.shift === 'P') p++; else g++;
           cls = w.shift;
@@ -522,6 +531,7 @@
         <span><i class="sw M"></i>Mattino ${esc(timeRange('M'))}</span>
         <span><i class="sw P"></i>Pomeriggio ${esc(timeRange('P'))}</span>
         <span><i class="sw G"></i>Giornata intera ${esc(timeRange('G'))}</span>
+        <span><i class="sw R"></i>Riposo</span>
         <span><i class="sw F"></i>Ferie</span>
         <span><i class="sw A"></i>Assente</span>
         <span><i class="sw manual"></i>Inserito a mano: la generazione non lo cambia</span>
@@ -538,8 +548,8 @@
         conflict: !Scheduler.canWork(e, d, w.shift) };
     }
     if (OFF_NAMES[man]) return { kind: man, short: man, long: OFF_NAMES[man], man };
-    if ((e.availability || [])[d] === 'X') return { kind: 'R', short: 'R', long: 'Riposo', man };
-    return { kind: '', short: '—', long: 'Nessun turno', man };
+    if (sched || (e.availability || [])[d] === 'X') return { kind: 'R', short: 'R', long: 'Riposo', man };
+    return { kind: '', short: '—', long: 'Da pianificare', man };
   }
 
   function renderDeptWeekMobile(dept, sched, dates) {
@@ -995,6 +1005,7 @@
         <h2>Generazione</h2>
         <label class="field">Turni a settimana per i nuovi dipendenti
           <input id="s-max" type="number" min="1" max="7" data-action="default-max" value="${esc(state.settings.defaultMaxShifts)}"></label>
+        <div class="row"><button class="btn" data-action="apply-max">Applica ${esc(state.settings.defaultMaxShifts)} turni a tutto il personale</button></div>
         <label class="check"><input id="s-hist" type="checkbox" data-action="use-history" ${state.settings.useHistory ? 'checked' : ''}>
           Compensa le settimane passate: chi ha fatto più mattine riceve più pomeriggi</label>
       </section>
@@ -1294,6 +1305,15 @@
         save();
         return toast(`Copiato su ${targets.length === 1 ? storeName(targets[0]) : 'tutti gli altri punti vendita'}`);
       }
+      case 'apply-max': {
+        const n = Number(state.settings.defaultMaxShifts) || DEFAULT_MAX_SHIFTS;
+        const count = state.employees.filter((e) => Number(e.maxShifts) !== n).length;
+        if (!count) return toast(`Tutti i dipendenti hanno già ${n} turni a settimana`);
+        return confirmed(`Impostare ${n} turni a settimana per ${count} ${count === 1 ? 'dipendente' : 'dipendenti'} di tutti i punti vendita?`, 'Applica', () => {
+          for (const e of state.employees) e.maxShifts = n;
+          toast(`${count} ${count === 1 ? 'dipendente aggiornato' : 'dipendenti aggiornati'}`);
+        });
+      }
       case 'reset-needs':
         return confirmed(`Ripristinare le persone richieste predefinite per ${storeName(store)}?`, 'Ripristina', () => {
           state.requirements[store] = defaultStoreRequirements();
@@ -1329,7 +1349,7 @@
         return render();
       }
       case 'time': state.settings.times[el.dataset.shift][el.dataset.edge] = el.value; return save();
-      case 'default-max': state.settings.defaultMaxShifts = Math.max(1, Math.min(7, parseInt(el.value, 10) || 5)); return save();
+      case 'default-max': state.settings.defaultMaxShifts = Math.max(1, Math.min(7, parseInt(el.value, 10) || DEFAULT_MAX_SHIFTS)); save(); return render();
       case 'restore': {
         const file = el.files && el.files[0];
         if (!file) return;

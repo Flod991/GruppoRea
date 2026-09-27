@@ -164,9 +164,16 @@
       subscribe(onChange) {
         client
           .channel('turni-dati')
-          .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
-            const row = payload.new;
+          .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, async (payload) => {
+            let row = payload.new;
             if (!row || !row.id) return;
+            // Oltre il limite di dimensione dei messaggi in tempo reale Supabase invia la riga
+            // senza i campi grandi: in quel caso la si rilegge dal database.
+            if (row.data === undefined || row.data === null) {
+              const { data, error } = await client.from(TABLE).select('id,data').eq('id', row.id).maybeSingle();
+              if (error || !data) return;
+              row = data;
+            }
             const json = JSON.stringify(row.data);
             if (lastSent[row.id] === json) return; // modifica nostra
             lastSent[row.id] = json;

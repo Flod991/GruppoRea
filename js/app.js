@@ -431,7 +431,9 @@
 
     const extra = sched ? `<details class="more no-print">
         <summary class="btn">Altro</summary>
+        <div class="menu-backdrop" aria-hidden="true"></div>
         <div class="menu">
+          <div class="menu-title">Altre azioni</div>
           <button class="btn" data-action="copy-week">Copia per Excel</button>
           ${EMBED ? '' : '<button class="btn" data-action="export-csv">Scarica CSV</button><button class="btn" data-action="print">Stampa</button>'}
           <button class="btn danger" data-action="clear-week">Svuota settimana</button>
@@ -515,7 +517,7 @@
       <td colspan="3"></td></tr>`;
 
     return `<div class="table-wrap"><table class="week dept-week">
-        <thead>${head}</thead><tbody>${needRow}${rows}${cover}</tbody></table></div>
+        <thead>${needRow}${head}</thead><tbody>${rows}${cover}</tbody></table></div>
       <div class="legend no-print">
         <span><i class="sw M"></i>Mattino ${esc(timeRange('M'))}</span>
         <span><i class="sw P"></i>Pomeriggio ${esc(timeRange('P'))}</span>
@@ -582,7 +584,7 @@
         return `<span class="cov ${have >= n ? 'ok' : 'bad'}">${s} ${have}/${n}</span>`;
       }).join('') || '<span class="muted small">—</span>'}</div>`).join('')}</div></div>`;
 
-    return `<div class="wk">${days}${needCard}${cards}${cover}</div>
+    return `<div class="wk">${needCard}${days}${cards}${cover}</div>
       <div class="legend">
         <span><i class="sw M"></i>M Mattino ${esc(timeRange('M'))}</span>
         <span><i class="sw P"></i>P Pomeriggio ${esc(timeRange('P'))}</span>
@@ -670,6 +672,11 @@
   }
   document.addEventListener('click', (ev) => {
     if (!ev.target.closest('.picker-menu') && !ev.target.closest('[data-action="pick"]')) closePicker();
+    // Il menu "Altro" si chiude toccando fuori o dopo aver scelto una voce.
+    const more = document.querySelector('details.more[open]');
+    if (more && (!ev.target.closest('details.more') || ev.target.closest('.menu [data-action]') || ev.target.classList.contains('menu-backdrop'))) {
+      more.open = false;
+    }
   });
   window.addEventListener('resize', closePicker);
   // Lo scorrimento chiude il menu, ma non quello residuo subito dopo il tocco che lo ha aperto.

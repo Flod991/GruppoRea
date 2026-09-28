@@ -1,6 +1,6 @@
 # Turni Gruppo Rea
 
-App web per pianificare i turni dei dipendenti nei punti vendita **Decò Volla, Decò Casoria, MD Volla, MD Casoria e MD Somma**,
+App web per pianificare i turni dei dipendenti nei punti vendita **Decò Volla, Decò Cittadella, MD Volla, Decò Santa Maria e MD Somma**,
 reparto per reparto: Panetteria, Salumeria, Macelleria, Pescheria, Ortofrutta, Casse e Scaffali.
 
 Ogni giornata ha due turni, **mattino** e **pomeriggio**. Per ogni reparto si sceglie quante persone servono in ciascun turno

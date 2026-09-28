@@ -7,9 +7,9 @@
   // ======================================================================
   const STORES = [
     { id: 'deco-volla', name: 'Decò Volla' },
-    { id: 'deco-casoria', name: 'Decò Casoria' },
+    { id: 'deco-casoria', name: 'Decò Cittadella' },
     { id: 'md-volla', name: 'MD Volla' },
-    { id: 'md-casoria', name: 'MD Casoria' },
+    { id: 'md-casoria', name: 'Decò Santa Maria' },
     { id: 'md-somma', name: 'MD Somma' },
   ];
   const DEPTS = [

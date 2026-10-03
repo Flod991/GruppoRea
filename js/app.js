@@ -1072,7 +1072,6 @@
     const sched = getSchedule(store, ui.week);
     const dates = weekDates(ui.week);
     const working = dates.map((_, d) => workingOn(sched, d));
-    const times = { M: plain(timeRange('M')), P: plain(timeRange('P')), G: plain(timeRange('G')) };
     const depts = DEPTS.filter((d) => (!ui.dept || d.id === ui.dept) && deptEmployees(store, d.id).length);
     const sections = depts.map((dept) => ({
       title: dept.name,
@@ -1083,7 +1082,7 @@
           if (c.kind === 'M' || c.kind === 'P' || c.kind === 'G') {
             total++;
             const where = working[d][e.id].dept !== e.dept ? ` (${deptName(working[d][e.id].dept)})` : '';
-            return { kind: c.kind, text: `${SHIFT_NAMES[c.kind]}\n${times[c.kind]}${where}` };
+            return { kind: c.kind, text: `${SHIFT_NAMES[c.kind]}${where}` };
           }
           if (c.kind === 'F' || c.kind === 'A') return { kind: c.kind, text: OFF_NAMES[c.kind] };
           return { kind: 'R', text: 'Riposo' };
@@ -1096,7 +1095,6 @@
       subtitle: `Settimana da lunedì ${fmtLong(dates[0])} a domenica ${fmtLong(dates[6])}`,
       days: dates.map((dt, i) => `${DAY_SHORT[i]} ${fmtShort(dt)}`),
       sections,
-      legend: `Mattino ${times.M}  ·  Pomeriggio ${times.P}  ·  Giornata intera ${times.G}`,
       footer: `Generato il ${fmtLong(new Date())}`,
       fileName: `Turni_${fileSafe(storeName(store))}_${ui.dept ? fileSafe(deptName(ui.dept)) + '_' : ''}${ui.week}.pdf`,
     };

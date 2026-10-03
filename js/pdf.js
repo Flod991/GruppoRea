@@ -39,7 +39,7 @@
    * @param {string} data.subtitle
    * @param {string[]} data.days          intestazioni dei giorni
    * @param {Array<{title:string, rows:Array<{name:string, cells:Array<{text:string, kind:string}>, total:string}>}>} data.sections
-   * @param {string} data.legend
+   * @param {string} [data.legend]     nota a piè di pagina (facoltativa)
    * @param {string} data.footer
    * @returns {Promise<Blob>}
    */

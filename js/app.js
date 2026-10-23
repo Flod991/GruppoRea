@@ -53,6 +53,17 @@
   const UI_KEY = 'gruppoRea.turni.ui';
   // Turni a settimana proposti per i nuovi dipendenti.
   const DEFAULT_MAX_SHIFTS = 6;
+  // Dopo quanti minuti di inattività l'app richiede di nuovo la password (solo con il database).
+  const SESSION_OPTIONS = [
+    { v: 15, label: '15 minuti' },
+    { v: 60, label: '1 ora' },
+    { v: 240, label: '4 ore' },
+    { v: 480, label: '8 ore' },
+    { v: 1440, label: '24 ore' },
+    { v: 10080, label: '7 giorni' },
+  ];
+  const DEFAULT_SESSION_MINUTES = 480;
+  const SESSION_KEY = 'gruppoRea.turni.sessione';
   // Nella versione pubblicata su claude.ai stampa e download non sono disponibili.
   const EMBED = !!window.TURNI_EMBED;
   // Logo (la versione a file unico lo passa già incorporato).
@@ -1000,6 +1011,14 @@
           <input id="t-${s}-start" type="time" data-action="time" data-shift="${s}" data-edge="start" value="${esc(t[s].start)}" aria-label="Inizio ${SHIFT_NAMES[s]}"> –
           <input id="t-${s}-end" type="time" data-action="time" data-shift="${s}" data-edge="end" value="${esc(t[s].end)}" aria-label="Fine ${SHIFT_NAMES[s]}"></div>`).join('')}
       </section>
+      ${storage.mode === 'cloud' ? `<section class="panel form">
+        <h2>Sicurezza</h2>
+        <label class="field">Richiedi di nuovo la password dopo un'inattività di
+          <select id="s-session" data-action="session-timeout">
+            ${SESSION_OPTIONS.map((o) => `<option value="${o.v}"${o.v === sessionMinutes() ? ' selected' : ''}>${o.label}</option>`).join('')}
+          </select></label>
+        <p class="hint">Vale per tutti gli utenti e tutti i dispositivi. Si conta dall'ultima volta che l'app è stata usata.</p>
+      </section>` : ''}
       <section class="panel form">
         <h2>Generazione</h2>
         <label class="field">Turni a settimana per i nuovi dipendenti
@@ -1195,7 +1214,9 @@
 
     document.getElementById('logout-btn').addEventListener('click', () => {
       ask(`Uscire dall'account ${(storage.user || {}).email || ''}?`, 'Esci').then((ok) => {
-        if (ok) storage.signOut().then(() => renderLogin());
+        if (!ok) return;
+        loggedIn = false;
+        storage.signOut().then(() => renderLogin());
       });
     });
 
@@ -1295,6 +1316,12 @@
     switch (el.dataset.action) {
       case 'use-history': state.settings.useHistory = el.checked; return save();
       case 'sum-month': ui.sumMonth = Number(el.value); saveUI(); return render();
+      case 'session-timeout': {
+        state.settings.sessionTimeout = Number(el.value) || DEFAULT_SESSION_MINUTES;
+        rememberTimeout();
+        save();
+        return toast(`La password verrà richiesta dopo ${SESSION_OPTIONS.find((o) => o.v === state.settings.sessionTimeout).label} di inattività`);
+      }
       case 'sum-year': ui.sumYear = Number(el.value); saveUI(); return render();
       case 'need': {
         const v = Math.max(0, Math.min(50, parseInt(el.value, 10) || 0));
@@ -1351,6 +1378,7 @@
   function onRemoteChange(id, data) {
     TurniStorage.applyDoc(state, id, data);
     state = normalize(state);
+    if (!loggedIn) return;
     if (typing()) { remotePending = true; return; }
     render();
   }
@@ -1374,6 +1402,9 @@
       state = normalize(local && !local.sampleData && (local.employees || []).length ? local : freshState(false));
       save();
     }
+    loggedIn = true;
+    rememberTimeout();
+    touchSession(true);
     if (!cloudStarted) {
       cloudStarted = true;
       storage.subscribe(onRemoteChange);
@@ -1382,6 +1413,55 @@
     }
     render();
   }
+
+  // ======================================================================
+  // Scadenza della sessione
+  // ======================================================================
+  // Supabase rinnova l'accesso all'infinito: è l'app a chiedere di nuovo la password
+  // dopo il periodo di inattività scelto nelle Impostazioni.
+  let loggedIn = false;
+
+  function readSession() {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY) || '{}'); } catch (e) { return {}; }
+  }
+  function writeSession(patch) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(Object.assign(readSession(), patch))); } catch (e) { /* non essenziale */ }
+  }
+  function sessionMinutes() {
+    const fromState = state && Number(state.settings.sessionTimeout);
+    return fromState || Number(readSession().timeout) || DEFAULT_SESSION_MINUTES;
+  }
+  // La durata scelta viene ricordata sul dispositivo per poterla controllare prima di leggere il database.
+  const rememberTimeout = () => writeSession({ timeout: sessionMinutes() });
+
+  function touchSession(force) {
+    if (!loggedIn) return;
+    const now = Date.now();
+    const last = Number(readSession().last) || 0;
+    if (force || now - last > 30000) writeSession({ last: now });
+  }
+  function sessionExpired() {
+    const last = Number(readSession().last);
+    return !!last && Date.now() - last > sessionMinutes() * 60000;
+  }
+
+  async function expireSession() {
+    if (!loggedIn || !sessionExpired()) return;
+    loggedIn = false;
+    closePicker();
+    document.querySelectorAll('.modal-backdrop').forEach((m) => m.remove());
+    const label = (SESSION_OPTIONS.find((o) => o.v === sessionMinutes()) || {}).label || '';
+    try { await storage.signOut(); } catch (e) { /* si mostra comunque l'accesso */ }
+    renderLogin(`Sessione scaduta dopo ${label} di inattività: accedi di nuovo.`);
+  }
+
+  ['pointerdown', 'keydown'].forEach((t) => document.addEventListener(t, () => touchSession(false), { passive: true }));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { touchSession(true); return; }
+    if (sessionExpired()) expireSession();
+    else touchSession(true);
+  });
+  setInterval(() => { if (document.visibilityState === 'visible') expireSession(); }, 60000);
 
   // ======================================================================
   // Aggiornamenti
@@ -1452,6 +1532,11 @@
       }
     });
     if (!user) return renderLogin();
+    if (sessionExpired()) {
+      const label = (SESSION_OPTIONS.find((o) => o.v === sessionMinutes()) || {}).label || '';
+      try { await storage.signOut(); } catch (e) { /* si mostra comunque l'accesso */ }
+      return renderLogin(`Sessione scaduta dopo ${label} di inattività: accedi di nuovo.`);
+    }
     try {
       await startCloud();
     } catch (e) {

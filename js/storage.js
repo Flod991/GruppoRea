@@ -170,7 +170,11 @@
        */
       log(entry) {
         if (!client || !user) return Promise.resolve();
-        return client.from(LOG_TABLE).insert(entry).then(() => {}, () => {});
+        try {
+          return Promise.resolve(client.from(LOG_TABLE).insert(entry)).then(() => {}, () => {});
+        } catch (e) {
+          return Promise.resolve();
+        }
       },
       /** true se l'utente collegato può leggere il registro. */
       async isAdmin() {

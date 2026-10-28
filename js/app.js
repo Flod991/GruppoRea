@@ -1690,6 +1690,7 @@
     if (!user) return renderLogin();
     if (sessionExpired()) {
       const label = (SESSION_OPTIONS.find((o) => o.v === sessionMinutes()) || {}).label || '';
+      await storage.log({ azione: 'Sessione scaduta', dettagli: `Dopo ${label} di inattività` });
       try { await storage.signOut(); } catch (e) { /* si mostra comunque l'accesso */ }
       return renderLogin(`Sessione scaduta dopo ${label} di inattività: accedi di nuovo.`);
     }

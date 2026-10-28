@@ -250,7 +250,7 @@
       const ui = Object.assign(def, JSON.parse(localStorage.getItem(UI_KEY) || '{}'));
       if (!STORES.some((x) => x.id === ui.store)) ui.store = def.store;
       if (ui.dept && !DEPTS.some((x) => x.id === ui.dept)) ui.dept = DEPTS[0].id;
-      if (!['plan', 'summary', 'staff', 'settings'].includes(ui.tab)) ui.tab = 'plan';
+      if (!['plan', 'summary', 'staff', 'settings', 'activity'].includes(ui.tab)) ui.tab = 'plan';
       if (!PERIODS.some((x) => x.v === ui.period)) ui.period = 'month';
       if (!(ui.sumMonth >= 0 && ui.sumMonth <= 11)) ui.sumMonth = def.sumMonth;
       if (!Number.isInteger(ui.sumYear)) ui.sumYear = def.sumYear;
@@ -302,6 +302,26 @@
     const day = sched.days[d];
     day[dept] = day[dept] || { M: [], P: [], G: [] };
     return day[dept];
+  }
+
+  // ======================================================================
+  // Registro attività (solo con il database; utente e orario li aggiunge Supabase)
+  // ======================================================================
+  function logAct(azione, extra) {
+    if (!storage || storage.mode !== 'cloud') return;
+    const e = Object.assign({ sede: storeName(ui.store), reparto: ui.dept ? deptName(ui.dept) : null, dettagli: null }, extra || {});
+    storage.log({ azione, sede: e.sede, reparto: e.reparto, dettagli: e.dettagli });
+  }
+  const dayLabel = (d) => `${DAY_SHORT[d].toLowerCase()} ${fmtShort(addDays(fromISO(ui.week), d))}`;
+
+  /** Come appare la casella di un dipendente in un giorno della settimana selezionata. */
+  function cellText(emp, d) {
+    const sched = getSchedule(ui.store, ui.week);
+    const w = workingOn(sched, d)[emp.id];
+    if (w) return SHIFT_NAMES[w.shift];
+    const man = manualOf(sched, emp.id, d);
+    if (OFF_NAMES[man]) return OFF_NAMES[man];
+    return sched ? 'Riposo' : 'vuoto';
   }
 
   /** Valore inserito a mano per un dipendente in un giorno ('' se automatico). */
@@ -408,14 +428,16 @@
     document.getElementById('logout-btn').hidden = storage.mode !== 'cloud';
     document.getElementById('tabs').hidden = false;
     document.getElementById('pickers').hidden = false;
-    document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.tab === ui.tab)));
     document.getElementById('store-select').innerHTML = STORES
       .map((s) => `<option value="${s.id}"${s.id === ui.store ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
     document.getElementById('dept-select').innerHTML = DEPTS
       .map((d) => `<option value="${d.id}"${d.id === ui.dept ? ' selected' : ''}>${esc(d.name)}</option>`).join('')
       + `<option value=""${ui.dept ? '' : ' selected'}>Tutti i reparti</option>`;
     closePicker();
-    const renderers = { plan: renderPlan, summary: renderSummary, staff: renderStaff, settings: renderSettings };
+    document.getElementById('tab-activity').hidden = !isAdmin;
+    if (ui.tab === 'activity' && !isAdmin) ui.tab = 'plan';
+    document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.tab === ui.tab)));
+    const renderers = { plan: renderPlan, summary: renderSummary, staff: renderStaff, settings: renderSettings, activity: renderActivity };
     view.innerHTML = renderers[ui.tab]();
     // Carica in anticipo le librerie del PDF, così la condivisione parte subito dopo il tocco.
     if ((ui.tab === 'plan' || ui.tab === 'summary') && !EMBED && window.TurniPDF) {
@@ -669,7 +691,10 @@
     menu.addEventListener('click', (ev) => {
       const o = ev.target.closest('[data-value]');
       if (!o) return;
+      const before = cellText(emp, d);
       setCell(emp, d, o.dataset.value);
+      const after = o.dataset.value ? cellText(emp, d) : 'Automatico';
+      logAct('Turno modificato', { reparto: deptName(emp.dept), dettagli: `${emp.name} · ${dayLabel(d)}: ${before} → ${after}` });
       closePicker();
       save();
       render();
@@ -956,6 +981,93 @@
     };
   }
 
+  // ---------------------------- Attività (solo amministratori) ----------------------------
+  let isAdmin = false;
+  const ACT_PERIODS = [
+    { v: '1', label: 'Oggi' },
+    { v: '7', label: 'Ultimi 7 giorni' },
+    { v: '30', label: 'Ultimi 30 giorni' },
+    { v: 'all', label: 'Tutto' },
+  ];
+  const ACT_PAGE = 100;
+  const act = { period: '7', email: '', sede: '', rows: [], emails: new Set(), more: false, loading: false, error: '', stale: true };
+
+  function actFrom() {
+    if (act.period === 'all') return null;
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - (Number(act.period) - 1));
+    return d.toISOString();
+  }
+
+  async function loadActivity(append) {
+    if (act.loading) return;
+    act.loading = true;
+    act.error = '';
+    if (!append) act.stale = false;
+    try {
+      const rows = await storage.activity({ from: actFrom(), email: act.email, sede: act.sede, offset: append ? act.rows.length : 0, limit: ACT_PAGE });
+      act.rows = append ? act.rows.concat(rows) : rows;
+      act.more = rows.length === ACT_PAGE;
+      for (const r of rows) if (r.email) act.emails.add(r.email);
+    } catch (e) {
+      act.error = 'Impossibile leggere il registro. Verifica di aver eseguito supabase/registro.sql su Supabase.';
+    }
+    act.loading = false;
+    if (ui.tab === 'activity') render();
+  }
+
+  function renderActivity() {
+    if (act.stale) loadActivity(false);
+    const time = (iso) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    const dayKey = (iso) => toISO(new Date(iso));
+    let lastDay = '';
+    const items = act.rows.map((r) => {
+      const k = dayKey(r.created_at);
+      const head = k !== lastDay ? `<li class="group">${DAY_NAMES[(fromISO(k).getDay() + 6) % 7]} ${fmtLong(fromISO(k))}</li>` : '';
+      lastDay = k;
+      const where = [r.sede, r.reparto].filter(Boolean).map(esc).join(' · ');
+      return `${head}<li class="act-item">
+        <span class="act-time">${time(r.created_at)}</span>
+        <div class="act-body">
+          <div><strong>${esc(r.azione)}</strong>${where ? ` <span class="muted small">· ${where}</span>` : ''}</div>
+          ${r.dettagli ? `<div class="small">${esc(r.dettagli)}</div>` : ''}
+          <div class="muted small act-user">${esc(r.email || 'utente sconosciuto')}</div>
+        </div></li>`;
+    }).join('');
+
+    const emails = [...act.emails].sort();
+    if (act.email && !emails.includes(act.email)) emails.unshift(act.email);
+    const body = act.error
+      ? `<div class="note bad">${esc(act.error)}</div>`
+      : act.loading && !act.rows.length
+        ? '<p class="empty">Caricamento…</p>'
+        : act.rows.length
+          ? `<ul class="plain-list act-list">${items}</ul>
+             ${act.more ? `<div class="row end"><button class="btn" data-action="act-more" ${act.loading ? 'disabled' : ''}>${act.loading ? 'Caricamento…' : 'Carica altre'}</button></div>` : ''}`
+          : '<p class="empty">Nessuna attività in questo periodo.</p>';
+
+    return `<section class="plan-head">
+        <div class="row act-filters">
+          <select id="act-period" data-action="act-period" aria-label="Periodo">
+            ${ACT_PERIODS.map((o) => `<option value="${o.v}"${o.v === act.period ? ' selected' : ''}>${o.label}</option>`).join('')}
+          </select>
+          <select id="act-email" data-action="act-email" aria-label="Utente">
+            <option value="">Tutti gli utenti</option>
+            ${emails.map((e) => `<option value="${esc(e)}"${e === act.email ? ' selected' : ''}>${esc(e)}</option>`).join('')}
+          </select>
+          <select id="act-sede" data-action="act-sede" aria-label="Punto vendita">
+            <option value="">Tutti i punti vendita</option>
+            ${STORES.map((st) => `<option value="${esc(st.name)}"${st.name === act.sede ? ' selected' : ''}>${esc(st.name)}</option>`).join('')}
+          </select>
+          <button class="btn" data-action="act-refresh">Aggiorna</button>
+        </div>
+        <h1>Attività <span class="sub">· chi ha usato l'app e cosa ha fatto</span></h1>
+      </section>
+      <section class="panel">${body}</section>
+      <p class="hint">Visibile solo agli amministratori. Utente e orario sono registrati dal database e non si possono modificare.</p>`;
+  }
+
   // ---------------------------- Personale ----------------------------
   let editingId = null;
 
@@ -1031,6 +1143,10 @@
   }
 
   function renderLogin(message) {
+    isAdmin = false;
+    act.rows = [];
+    act.emails = new Set();
+    act.stale = true;
     document.getElementById('tabs').hidden = true;
     document.getElementById('pickers').hidden = true;
     document.body.classList.add('auth');
@@ -1159,6 +1275,7 @@
       btn.disabled = false;
       btn.textContent = label;
     }
+    logAct(builder === TurniPDF.buildSummary ? 'PDF riepilogo creato' : 'PDF turni creato', { dettagli: data.fileName });
     const file = new File([blob], data.fileName, { type: 'application/pdf' });
     if (!canSharePdf()) return download(data.fileName, blob, 'application/pdf');
     try {
@@ -1215,6 +1332,7 @@
     document.getElementById('logout-btn').addEventListener('click', () => {
       ask(`Uscire dall'account ${(storage.user || {}).email || ''}?`, 'Esci').then((ok) => {
         if (!ok) return;
+        logAct('Uscita', { sede: null, reparto: null });
         loggedIn = false;
         storage.signOut().then(() => renderLogin());
       });
@@ -1251,12 +1369,15 @@
       case 'period-next': return shiftPeriod(1);
       case 'summary-dept': ui.dept = el.dataset.dept; saveUI(); return render();
       case 'pick': return openPicker(el);
+      case 'act-refresh': act.stale = true; return render();
+      case 'act-more': return loadActivity(true);
       case 'generate': {
         const depts = ui.dept ? [ui.dept] : DEPTS.map((d) => d.id);
         // Nessuna conferma: le caselle inserite a mano restano come sono.
         const missing = generate(store, week, depts);
         save();
         render();
+        logAct('Turni generati', { dettagli: `Settimana dal ${fmtLong(fromISO(week))}${ui.dept ? '' : ', tutti i reparti'}${missing ? ` · ${missing} posti scoperti` : ''}` });
         return toast(missing ? `Turni generati: ${missing} ${missing === 1 ? 'posto scoperto' : 'posti scoperti'}` : 'Turni generati e bilanciati');
       }
       case 'clear-week': {
@@ -1269,6 +1390,7 @@
               for (const s of SLOTS) day[dp][s] = (day[dp][s] || []).filter((id) => manualOf(sched, id, d) === s);
             }
           });
+          logAct('Settimana svuotata', { dettagli: `Settimana dal ${fmtLong(fromISO(week))}${ui.dept ? '' : ', tutti i reparti'}` });
         });
       }
       case 'copy-week': {
@@ -1291,6 +1413,7 @@
         if (!e) return;
         return confirmed(`Eliminare ${e.name}? Verrà tolto anche dai turni già pianificati.`, 'Elimina', () => {
           removeEmployee(e);
+          logAct('Dipendente eliminato', { sede: storeName(e.store), reparto: deptName(e.dept), dettagli: e.name });
           toast(`${e.name} eliminato`);
         });
       }
@@ -1304,6 +1427,7 @@
         if (!count) return toast(`Tutti i dipendenti hanno già ${n} turni a settimana`);
         return confirmed(`Impostare ${n} turni a settimana per ${count} ${count === 1 ? 'dipendente' : 'dipendenti'} di tutti i punti vendita?`, 'Applica', () => {
           for (const e of state.employees) e.maxShifts = n;
+          logAct('Impostazioni modificate', { sede: null, reparto: null, dettagli: `${n} turni a settimana applicati a ${count} dipendenti` });
           toast(`${count} ${count === 1 ? 'dipendente aggiornato' : 'dipendenti aggiornati'}`);
         });
       }
@@ -1314,23 +1438,39 @@
     const el = ev.target;
     const store = ui.store;
     switch (el.dataset.action) {
-      case 'use-history': state.settings.useHistory = el.checked; return save();
+      case 'use-history':
+        state.settings.useHistory = el.checked;
+        logAct('Impostazioni modificate', { sede: null, reparto: null, dettagli: `Compensa le settimane passate: ${el.checked ? 'sì' : 'no'}` });
+        return save();
       case 'sum-month': ui.sumMonth = Number(el.value); saveUI(); return render();
+      case 'act-period': act.period = el.value; act.stale = true; return render();
+      case 'act-email': act.email = el.value; act.stale = true; return render();
+      case 'act-sede': act.sede = el.value; act.stale = true; return render();
       case 'session-timeout': {
         state.settings.sessionTimeout = Number(el.value) || DEFAULT_SESSION_MINUTES;
         rememberTimeout();
         save();
+        logAct('Impostazioni modificate', { sede: null, reparto: null, dettagli: `Password richiesta dopo ${SESSION_OPTIONS.find((o) => o.v === state.settings.sessionTimeout).label} di inattività` });
         return toast(`La password verrà richiesta dopo ${SESSION_OPTIONS.find((o) => o.v === state.settings.sessionTimeout).label} di inattività`);
       }
       case 'sum-year': ui.sumYear = Number(el.value); saveUI(); return render();
       case 'need': {
         const v = Math.max(0, Math.min(50, parseInt(el.value, 10) || 0));
+        const prev = state.requirements[store][ui.dept][el.dataset.day][el.dataset.shift];
         state.requirements[store][ui.dept][el.dataset.day][el.dataset.shift] = v;
+        if (prev !== v) logAct('Persone richieste modificate', { dettagli: `${DAY_NAMES[el.dataset.day]}, ${SHIFT_NAMES[el.dataset.shift].toLowerCase()}: ${prev} → ${v}` });
         save();
         return render();
       }
-      case 'time': state.settings.times[el.dataset.shift][el.dataset.edge] = el.value; return save();
-      case 'default-max': state.settings.defaultMaxShifts = Math.max(1, Math.min(7, parseInt(el.value, 10) || DEFAULT_MAX_SHIFTS)); save(); return render();
+      case 'time':
+        state.settings.times[el.dataset.shift][el.dataset.edge] = el.value;
+        logAct('Impostazioni modificate', { sede: null, reparto: null, dettagli: `Orario ${SHIFT_NAMES[el.dataset.shift].toLowerCase()}: ${state.settings.times[el.dataset.shift].start}-${state.settings.times[el.dataset.shift].end}` });
+        return save();
+      case 'default-max':
+        state.settings.defaultMaxShifts = Math.max(1, Math.min(7, parseInt(el.value, 10) || DEFAULT_MAX_SHIFTS));
+        logAct('Impostazioni modificate', { sede: null, reparto: null, dettagli: `Turni a settimana per i nuovi dipendenti: ${state.settings.defaultMaxShifts}` });
+        save();
+        return render();
     }
   }
 
@@ -1348,10 +1488,19 @@
       availability: DAY_SHORT.map((_, i) => String(f.get(`av${i}`) || '')),
     };
     if (editingId) {
-      Object.assign(empById(editingId), data);
+      const old = empById(editingId);
+      const changes = [];
+      if (old.name !== data.name) changes.push(`nome: ${old.name} → ${data.name}`);
+      if (old.store !== data.store) changes.push(`punto vendita: ${storeName(old.store)} → ${storeName(data.store)}`);
+      if (old.dept !== data.dept) changes.push(`reparto: ${deptName(old.dept)} → ${deptName(data.dept)}`);
+      if (Number(old.maxShifts) !== data.maxShifts) changes.push(`turni a settimana: ${old.maxShifts} → ${data.maxShifts}`);
+      if ((old.availability || []).join() !== data.availability.join()) changes.push('disponibilità');
+      Object.assign(old, data);
+      logAct('Dipendente modificato', { sede: storeName(data.store), reparto: deptName(data.dept), dettagli: `${name}${changes.length ? ` (${changes.join(', ')})` : ''}` });
       toast(`${name} aggiornato`);
     } else {
       state.employees.push(Object.assign({ id: uid() }, data));
+      logAct('Dipendente aggiunto', { sede: storeName(data.store), reparto: deptName(data.dept), dettagli: `${name}, ${data.maxShifts} turni a settimana` });
       toast(`${name} aggiunto a ${deptName(data.dept)}, ${storeName(data.store)}`);
     }
     editingId = null;
@@ -1405,6 +1554,11 @@
     loggedIn = true;
     rememberTimeout();
     touchSession(true);
+    storage.isAdmin().then((v) => {
+      isAdmin = v;
+      act.stale = true;
+      if (loggedIn) render();
+    }, () => {});
     if (!cloudStarted) {
       cloudStarted = true;
       storage.subscribe(onRemoteChange);
@@ -1451,6 +1605,7 @@
     closePicker();
     document.querySelectorAll('.modal-backdrop').forEach((m) => m.remove());
     const label = (SESSION_OPTIONS.find((o) => o.v === sessionMinutes()) || {}).label || '';
+    await storage.log({ azione: 'Sessione scaduta', dettagli: `Dopo ${label} di inattività` });
     try { await storage.signOut(); } catch (e) { /* si mostra comunque l'accesso */ }
     renderLogin(`Sessione scaduta dopo ${label} di inattività: accedi di nuovo.`);
   }
@@ -1525,6 +1680,7 @@
       } catch (e) {
         return renderLogin('Email o password non corrette.');
       }
+      logAct('Accesso', { sede: null, reparto: null });
       try {
         await startCloud();
       } catch (e) {
@@ -1539,6 +1695,7 @@
     }
     try {
       await startCloud();
+      logAct('Apertura app', { sede: null, reparto: null });
     } catch (e) {
       renderLogin('Sessione scaduta: accedi di nuovo.');
     }

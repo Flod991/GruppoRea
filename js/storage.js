@@ -10,6 +10,8 @@
 
   const LOCAL_KEY = 'gruppoRea.turni.v1';
   const TABLE = 'turni_dati';
+  const LOG_TABLE = 'registro_attivita';
+  const ADMIN_TABLE = 'amministratori';
   // Copia locale della libreria @supabase/supabase-js (licenza MIT), caricata solo se serve.
   const SUPABASE_SRC = 'js/vendor/supabase-2.116.0.js';
 
@@ -63,6 +65,8 @@
     return {
       mode: 'local',
       async load() { return readLocal(); },
+      log() { return Promise.resolve(); },
+      async isAdmin() { return false; },
       save(state) { return writeLocal(state); },
       flush() {},
     };
@@ -160,6 +164,31 @@
         return true;
       },
       flush,
+      /**
+       * Registra un'operazione nel registro attività (utente e orario li aggiunge il database).
+       * Non blocca mai l'app: se la tabella manca o la rete non risponde, si ignora.
+       */
+      log(entry) {
+        if (!client || !user) return Promise.resolve();
+        return client.from(LOG_TABLE).insert(entry).then(() => {}, () => {});
+      },
+      /** true se l'utente collegato può leggere il registro. */
+      async isAdmin() {
+        if (!client || !user) return false;
+        const { data, error } = await client.from(ADMIN_TABLE).select('email').limit(1);
+        return !error && !!(data && data.length);
+      },
+      /** Voci del registro, dalla più recente. */
+      async activity({ from, email, sede, offset = 0, limit = 100 } = {}) {
+        let q = client.from(LOG_TABLE).select('created_at,email,azione,sede,reparto,dettagli')
+          .order('created_at', { ascending: false });
+        if (from) q = q.gte('created_at', from);
+        if (email) q = q.eq('email', email);
+        if (sede) q = q.eq('sede', sede);
+        const { data, error } = await q.range(offset, offset + limit - 1);
+        if (error) throw error;
+        return data || [];
+      },
       /** Notifica le modifiche fatte da altri utenti. */
       subscribe(onChange) {
         client

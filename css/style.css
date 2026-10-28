@@ -613,3 +613,14 @@ body.auth .app-header { display: none; }
   .time-row .label { grid-column: 1 / -1; }
   .time-row input { min-height: 46px; font-size: 16px; }
 }
+
+/* ---------- Attività ---------- */
+.act-filters select { min-width: 0; }
+.act-list li.act-item { display: flex; align-items: flex-start; gap: 12px; flex-wrap: nowrap; justify-content: flex-start; }
+.act-time { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); min-width: 44px; padding-top: 1px; }
+.act-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.act-body .small { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .act-filters { display: grid; grid-template-columns: 1fr 1fr; }
+  .act-filters select, .act-filters .btn { width: 100%; min-height: 46px; font-size: 16px; }
+}

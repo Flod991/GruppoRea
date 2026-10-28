@@ -74,6 +74,19 @@ Da quel momento l'app chiede email e password e salva tutto nel database. Ogni p
 due sedi possono lavorare nello stesso momento e le modifiche compaiono subito anche alle altre.
 Al primo accesso, se nel browser c'erano già dati reali (non di esempio), vengono caricati nel database.
 
+### Registro attività (solo amministratori)
+
+Eseguendo anche [`supabase/registro.sql`](supabase/registro.sql) l'app registra ogni operazione (accessi, turni generati
+e modificati, persone richieste, personale, PDF, impostazioni) con utente, data e ora. Gli amministratori vedono la scheda
+**Attività** con filtri per periodo, utente e punto vendita. Per rendere amministratore un utente, in SQL Editor:
+
+```sql
+insert into public.amministratori (email) values ('nome@esempio.it') on conflict do nothing;
+```
+
+Il registro può essere letto solo dagli amministratori e nessuno può modificarlo o cancellarlo dall'app;
+utente e orario sono scritti dal database. Informare gli utenti che l'uso dell'app viene registrato.
+
 La chiave *publishable* può stare nel codice pubblico: senza accesso con un utente registrato i dati non sono leggibili né modificabili.
 
 ## Sviluppo
